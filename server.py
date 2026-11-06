@@ -285,6 +285,9 @@ def init_db():
         """
     )
 
+    # Ensure all registered users are marked active and confirmed
+    cur.execute("UPDATE users SET email_confirmed = 1 WHERE email_confirmed = 0")
+
     # Seed dedicated Moderation Account if not present
     mod_row = cur.execute(
         "SELECT * FROM users WHERE handle = ? OR email = ?",
@@ -313,8 +316,213 @@ def init_db():
             (hash_pw(DEFAULT_MOD_PASSWORD), mod_row["id"]),
         )
 
+    # Seed full prototype community: accounts, mutual connections, posts with music, and active stories
+    seed_demo_community(cur)
+
     conn.commit()
     conn.close()
+
+
+def seed_demo_community(cur):
+    now_ts = int(time.time())
+    default_pw = hash_pw("Ivris2026!")
+
+    demo_users = [
+        ("usr_971b1488ae5524d0", "azosche1@gmail.com", "awz", "Ayden Zosche", "Building Ivris • Blair Academy & Tech", "", "personal", 0),
+        ("usr_9c25f7204a8cf5c1", "zoscha@blair.edu", "zoscha", "Zoscha", "Blair ’24 • Film & Architecture", "", "personal", 0),
+        ("usr_claireb", "claire@umich.edu", "claireb", "Claire Bennett", "Michigan ’22 • Product design, photography, film", "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80", "personal", 0),
+        ("usr_lucasmeyer", "lucas@newtrier.org", "lucasmeyer", "Lucas Meyer", "New Trier ’18 • Sound engineer & cyclist", "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80", "personal", 0),
+        ("usr_mayalin", "mayalin@umich.edu", "mayalin", "Maya Lin", "Michigan ’22 • Architecture & urban design", "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80", "personal", 0),
+        ("usr_elena_r", "elena@stanford.edu", "elena_r", "Elena Rostova", "Ceramics & studio design • SF", "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80", "personal", 0),
+        ("usr_samir_p", "samir@nyu.edu", "samir.p", "Samir Patel", "Software & coffee roasts • NYC", "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80", "personal", 0),
+        ("usr_hannahk", "hannah@columbia.edu", "hannahk", "Hannah Kim", "Brooklyn, NY • Visual arts", "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=300&auto=format&fit=crop&q=80", "personal", 0),
+        ("usr_jvance", "jvance@umich.edu", "jvance", "Jordan Vance", "Michigan ’22 • Marathoner", "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=300&auto=format&fit=crop&q=80", "personal", 0),
+        ("inst_michiganalumni", "alumni@umich.edu", "michiganalumni", "University of Michigan Alumni", "Official University of Michigan Alumni Community", "https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=300&auto=format&fit=crop&q=80", "institution", 1),
+        ("inst_stanford", "alumni@stanford.edu", "stanford", "Stanford University Alumni", "Official Stanford University Community", "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=300&auto=format&fit=crop&q=80", "institution", 1),
+        ("inst_blair", "alumni@blair.edu", "blair", "Blair Academy Alumni", "Official Blair Academy Community & Network", "https://images.unsplash.com/photo-1562774053-701939374585?w=300&auto=format&fit=crop&q=80", "institution", 1),
+    ]
+
+    for uid, email, handle, dname, bio, avatar, atype, is_inst in demo_users:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO users (id, email, password_hash, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?)
+            """,
+            (uid, email, default_pw, handle, dname, bio, avatar, atype, is_inst, json.dumps(DEFAULT_SETTINGS), now_ts - 86400 * 3),
+        )
+
+    # Demo Connections
+    demo_conns = [
+        ("conn_awz_zoscha", "usr_971b1488ae5524d0", "usr_9c25f7204a8cf5c1", "accepted"),
+        ("conn_awz_maya", "usr_971b1488ae5524d0", "usr_mayalin", "accepted"),
+        ("conn_awz_elena", "usr_971b1488ae5524d0", "usr_elena_r", "accepted"),
+        ("conn_zoscha_maya", "usr_9c25f7204a8cf5c1", "usr_mayalin", "accepted"),
+        ("conn_zoscha_samir", "usr_9c25f7204a8cf5c1", "usr_samir_p", "accepted"),
+        ("conn_claire_awz", "usr_claireb", "usr_971b1488ae5524d0", "pending"),
+        ("conn_lucas_awz", "usr_lucasmeyer", "usr_971b1488ae5524d0", "pending"),
+        ("conn_claire_zoscha", "usr_claireb", "usr_9c25f7204a8cf5c1", "pending"),
+    ]
+    for cid, r_id, a_id, st in demo_conns:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO connections (id, requester_id, addressee_id, status, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (cid, r_id, a_id, st, now_ts - 3600 * 12),
+        )
+
+    # Feed Posts with Music
+    demo_posts = [
+        (
+            "post_seed_maya_1",
+            "usr_mayalin",
+            "photo_post",
+            "https://images.unsplash.com/photo-1513694203232-719a280e022f?w=1000&auto=format&fit=crop&q=80",
+            json.dumps(["https://images.unsplash.com/photo-1513694203232-719a280e022f?w=1000&auto=format&fit=crop&q=80", "https://images.unsplash.com/photo-1497366216548-37526070297c?w=1000&auto=format&fit=crop&q=80"]),
+            "Morning studio light in Ann Arbor ☕️ drafting new pavilion concepts.",
+            "Ann Arbor, MI",
+            json.dumps({
+                "id": "1",
+                "title": "Golden Hour",
+                "artist": "JVKE",
+                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/bf/d7/ee/bfd7ee2a-7d49-a299-4700-1175aa667fc4/196589255755.jpg/100x100bb.jpg",
+                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview112/v4/cd/e1/9f/cde19fca-bb98-251c-c9d3-5dc21124233d/mzaf_10027179047355026046.plus.aac.p.m4a",
+                "start_time": 0
+            }),
+            now_ts - 3600 * 3,
+        ),
+        (
+            "post_seed_elena_1",
+            "usr_elena_r",
+            "photo_post",
+            "https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?w=1000&auto=format&fit=crop&q=80",
+            json.dumps(["https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?w=1000&auto=format&fit=crop&q=80"]),
+            "Glazing day at the kiln. New stoneware pieces coming together.",
+            "Mission District, SF",
+            json.dumps({
+                "id": "2",
+                "title": "As It Was",
+                "artist": "Harry Styles",
+                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/9b/6c/c2/9b6cc214-ee18-3580-b747-975949a24467/886449989063.jpg/100x100bb.jpg",
+                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview122/v4/4a/12/35/4a1235fe-2fa3-20aa-6272-132d43bf6ce9/mzaf_472400305885236717.plus.aac.p.m4a",
+                "start_time": 0
+            }),
+            now_ts - 3600 * 6,
+        ),
+        (
+            "post_seed_blair_1",
+            "inst_blair",
+            "photo_post",
+            "https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=1000&auto=format&fit=crop&q=80",
+            json.dumps(["https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=1000&auto=format&fit=crop&q=80", "https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1000&auto=format&fit=crop&q=80"]),
+            "Autumn on the hill. Welcome back alumni and students for Homecoming weekend! 🍂",
+            "Blairstown, NJ",
+            json.dumps({
+                "id": "3",
+                "title": "Daylight",
+                "artist": "David Kushner",
+                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music116/v4/65/59/e6/6559e663-e5e3-6a2d-ec30-4e789f2d1e04/197188722950.jpg/100x100bb.jpg",
+                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview116/v4/05/27/c5/0527c5fa-d4f1-6a2c-f6ef-e23a49931885/mzaf_6135802377289569476.plus.aac.p.m4a",
+                "start_time": 0
+            }),
+            now_ts - 3600 * 10,
+        ),
+        (
+            "post_seed_samir_1",
+            "usr_samir_p",
+            "photo_post",
+            "https://images.unsplash.com/photo-1498050108023-c5249f4df085?w=1000&auto=format&fit=crop&q=80",
+            json.dumps(["https://images.unsplash.com/photo-1498050108023-c5249f4df085?w=1000&auto=format&fit=crop&q=80"]),
+            "Shipped v2.0 from Soho today. Coffee counter coding session.",
+            "SoHo, New York",
+            json.dumps({
+                "id": "4",
+                "title": "Passionfruit",
+                "artist": "Drake",
+                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/6b/c5/33/6bc533b6-ae38-3498-8ec4-d621946a0669/17UMGIM86060.rgb.jpg/100x100bb.jpg",
+                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview125/v4/35/d5/92/35d59296-6e27-6cf3-e9bf-0b1aeb0eb9d6/mzaf_18210332840621415694.plus.aac.p.m4a",
+                "start_time": 0
+            }),
+            now_ts - 3600 * 14,
+        ),
+    ]
+    for pid, aid, kind, murl, urls_json, cap, loc, mus_json, created in demo_posts:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO posts (id, author_id, media_kind, media_url, media_urls_json, caption, location_label, music_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (pid, aid, kind, murl, urls_json, cap, loc, mus_json, created),
+        )
+
+    # Active Stories with Music (active for 24 hours)
+    demo_stories = [
+        (
+            "story_seed_maya_1",
+            "usr_mayalin",
+            "video_story",
+            "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=800&auto=format&fit=crop&q=80",
+            json.dumps(["https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=800&auto=format&fit=crop&q=80"]),
+            "Ann Arbor trail sunrise ☀️",
+            "Ann Arbor, MI",
+            json.dumps({
+                "id": "1",
+                "title": "Golden Hour",
+                "artist": "JVKE",
+                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/bf/d7/ee/bfd7ee2a-7d49-a299-4700-1175aa667fc4/196589255755.jpg/100x100bb.jpg",
+                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview112/v4/cd/e1/9f/cde19fca-bb98-251c-c9d3-5dc21124233d/mzaf_10027179047355026046.plus.aac.p.m4a",
+                "start_time": 0
+            }),
+            now_ts + 86400,
+            now_ts - 1800,
+        ),
+        (
+            "story_seed_elena_1",
+            "usr_elena_r",
+            "video_story",
+            "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?w=800&auto=format&fit=crop&q=80",
+            json.dumps(["https://images.unsplash.com/photo-1519710164239-da123dc03ef4?w=800&auto=format&fit=crop&q=80"]),
+            "Studio afternoon",
+            "San Francisco, CA",
+            json.dumps({
+                "id": "2",
+                "title": "As It Was",
+                "artist": "Harry Styles",
+                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/9b/6c/c2/9b6cc214-ee18-3580-b747-975949a24467/886449989063.jpg/100x100bb.jpg",
+                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview122/v4/4a/12/35/4a1235fe-2fa3-20aa-6272-132d43bf6ce9/mzaf_472400305885236717.plus.aac.p.m4a",
+                "start_time": 0
+            }),
+            now_ts + 86400,
+            now_ts - 3600,
+        ),
+        (
+            "story_seed_blair_1",
+            "inst_blair",
+            "video_story",
+            "https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=800&auto=format&fit=crop&q=80",
+            json.dumps(["https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=800&auto=format&fit=crop&q=80"]),
+            "Morning walk past Sharpe House 🏛️",
+            "Blairstown, NJ",
+            json.dumps({
+                "id": "3",
+                "title": "Daylight",
+                "artist": "David Kushner",
+                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music116/v4/65/59/e6/6559e663-e5e3-6a2d-ec30-4e789f2d1e04/197188722950.jpg/100x100bb.jpg",
+                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview116/v4/05/27/c5/0527c5fa-d4f1-6a2c-f6ef-e23a49931885/mzaf_6135802377289569476.plus.aac.p.m4a",
+                "start_time": 0
+            }),
+            now_ts + 86400,
+            now_ts - 5400,
+        ),
+    ]
+    for sid, aid, kind, murl, urls_json, cap, loc, mus_json, exp, created in demo_stories:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO posts (id, author_id, media_kind, media_url, media_urls_json, caption, location_label, music_json, expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (sid, aid, kind, murl, urls_json, cap, loc, mus_json, exp, created),
+        )
 
 
 def inspect_image_bytes_for_nudity(raw_bytes: bytes) -> tuple[bool, str]:
@@ -826,7 +1034,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     """
                     SELECT id, handle, display_name, bio, avatar_url, account_type, is_verified_institution
                     FROM users
-                    WHERE id != ? AND email_confirmed = 1 AND account_type != 'moderator'
+                    WHERE id != ? AND account_type != 'moderator'
                     ORDER BY created_at DESC
                     """,
                     (uid,),
@@ -1009,11 +1217,22 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     )
 
                 uid = "usr_" + secrets.token_hex(8)
-                code = f"{random.randint(100000, 999999)}"
+                user_obj = {
+                    "id": uid,
+                    "email": email,
+                    "handle": handle,
+                    "display_name": display_name,
+                    "bio": "",
+                    "avatar_url": "",
+                    "account_type": "personal",
+                    "is_verified_institution": 0,
+                    "password_hash": hash_pw(password),
+                }
+                token = create_session_token(user_obj)
                 conn.execute(
                     """
-                    INSERT INTO users (id, email, password_hash, handle, display_name, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, 'personal', 0, 0, ?, ?, ?)
+                    INSERT INTO users (id, email, password_hash, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, '', '', 'personal', 0, 1, '', ?, ?)
                     """,
                     (
                         uid,
@@ -1021,17 +1240,21 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         hash_pw(password),
                         handle,
                         display_name,
-                        code,
                         json.dumps(DEFAULT_SETTINGS),
                         int(time.time()),
                     ),
                 )
+                conn.execute(
+                    "INSERT OR IGNORE INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
+                    (token, uid, int(time.time())),
+                )
                 conn.commit()
                 return self.send_json(
                     {
-                        "needs_confirmation": True,
-                        "email": email,
-                        "confirmation_code_preview": code,
+                        "token": token,
+                        "account_type": "personal",
+                        "handle": handle,
+                        "user": user_obj,
                     }
                 )
 

@@ -2,8 +2,6 @@ node_modules/
 .expo/
 dist/
 web-build/
-*.db
-*.db-journal
 web/uploads/*
 .DS_Store
 .env
