@@ -2150,6 +2150,70 @@
       } catch (_e) {}
     }
 
+    async function modCreateBackupSnapshot() {
+      try {
+        const res = await apiFetch('/api/admin/backup/create', {
+          method: 'POST',
+          body: JSON.stringify({ label: 'manual' })
+        });
+        if (res && res.ok) {
+          appState.modBanner = `Snapshot created: ${res.backup?.filename || 'Success'}`;
+          await loadLiveData();
+        } else {
+          alert((res && res.error) || 'Failed to create snapshot');
+        }
+      } catch (err) {
+        alert('Network error: ' + err.message);
+      }
+    }
+
+    async function modRestoreNamedBackup(filename) {
+      try {
+        const res = await apiFetch('/api/admin/backup/restore', {
+          method: 'POST',
+          body: JSON.stringify({ filename })
+        });
+        if (res && res.ok) {
+          alert('Database restored successfully: ' + res.message);
+          await loadLiveData();
+        } else {
+          alert('Restore failed: ' + ((res && res.error) || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Restore network error: ' + err.message);
+      }
+    }
+
+    async function modRestoreBackupFromFile(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      if (!confirm(`Are you sure you want to restore "${file.name}"? This will overwrite the live database with this backup file.`)) {
+        event.target.value = '';
+        return;
+      }
+      try {
+        const reader = new FileReader();
+        reader.onload = async () => {
+          const base64Data = (reader.result || '').split(',')[1];
+          const res = await apiFetch('/api/admin/backup/restore', {
+            method: 'POST',
+            body: JSON.stringify({ backup_base64: base64Data })
+          });
+          if (res && res.ok) {
+            alert('Database restored successfully! ' + res.message);
+            await loadLiveData();
+          } else {
+            alert('Failed to restore: ' + ((res && res.error) || 'Unknown error'));
+          }
+        };
+        reader.readAsDataURL(file);
+      } catch (err) {
+        alert('Error reading file: ' + err.message);
+      } finally {
+        event.target.value = '';
+      }
+    }
+
     function stepCarousel(postId, delta, total) {
       const current = appState.carouselIndexes[postId] || 0;
       const next = (current + delta + total) % total;
@@ -2447,6 +2511,84 @@
               : `<button onclick="modApproveInstitution('${a.id}')" class="px-3 py-1.5 rounded-lg bg-sky-500 text-white text-xs font-semibold">Approve & verify</button>`}
           </div>
         `).join('');
+      } else if (tab === 'backups') {
+        const b = d.backup_status || { db_path: '', db_info: {}, backups: [] };
+        const dbInfo = b.db_info || {};
+        const backups = b.backups || [];
+        content = `
+          <div class="space-y-4">
+            <div class="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+                  <p class="text-xs font-bold text-white uppercase tracking-wider">Authoritative Server Database</p>
+                </div>
+                <span class="text-[11px] text-zinc-400 font-mono">${escapeAttr(dbInfo.size_human || '')}</span>
+              </div>
+              <div class="grid grid-cols-3 gap-2 text-center pt-1">
+                <div class="p-2.5 rounded-xl bg-black/40 border border-zinc-800/80">
+                  <p class="text-base font-bold text-white">${dbInfo.users_count !== undefined ? dbInfo.users_count : (d.users || []).length}</p>
+                  <p class="text-[10px] text-zinc-400">Total Users</p>
+                </div>
+                <div class="p-2.5 rounded-xl bg-black/40 border border-zinc-800/80">
+                  <p class="text-base font-bold text-white">${dbInfo.posts_count !== undefined ? dbInfo.posts_count : (d.active_posts || []).length}</p>
+                  <p class="text-[10px] text-zinc-400">Live Posts</p>
+                </div>
+                <div class="p-2.5 rounded-xl bg-black/40 border border-zinc-800/80">
+                  <p class="text-base font-bold text-white">${backups.length}</p>
+                  <p class="text-[10px] text-zinc-400">Snapshots</p>
+                </div>
+              </div>
+              <p class="text-[11px] text-zinc-500 truncate font-mono">Path: ${escapeAttr(b.db_path || 'ivris.db')}</p>
+            </div>
+
+            <div class="space-y-2">
+              <a href="/api/admin/backup/download" download class="w-full py-3 px-4 rounded-xl bg-white text-black font-semibold text-xs flex items-center justify-center gap-2 shadow-lg active:scale-[0.98] transition">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                <span>Download Live Database (.db)</span>
+              </a>
+
+              <div class="grid grid-cols-2 gap-2">
+                <button onclick="modCreateBackupSnapshot()" class="py-2.5 px-3 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-semibold text-zinc-200 active:scale-95 transition flex items-center justify-center gap-1.5">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                  <span>Snapshot now</span>
+                </button>
+                <label class="py-2.5 px-3 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-semibold text-zinc-200 active:scale-95 transition flex items-center justify-center gap-1.5 cursor-pointer">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  <span>Restore .db file</span>
+                  <input type="file" accept=".db,.sqlite,.sqlite3" onchange="modRestoreBackupFromFile(event)" class="hidden" />
+                </label>
+              </div>
+            </div>
+
+            <div class="space-y-2 pt-2">
+              <h2 class="text-xs font-bold text-zinc-400 uppercase tracking-wider">Automated Snapshots History</h2>
+              ${backups.length === 0 ? `<p class="py-8 text-center text-xs text-zinc-500">No snapshots created yet. Automatic snapshots run hourly.</p>` : `
+                <div class="space-y-2">
+                  ${backups.map(bk => `
+                    <div class="p-3 rounded-2xl bg-zinc-900/60 border border-zinc-800 flex items-center justify-between gap-3">
+                      <div class="min-w-0">
+                        <div class="flex items-center gap-2">
+                          <p class="text-xs font-semibold truncate text-zinc-200">${escapeAttr(bk.filename)}</p>
+                          ${bk.is_latest_pointer ? `<span class="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 text-[9px] font-bold">LATEST</span>` : ''}
+                        </div>
+                        <p class="text-[11px] text-zinc-500">${escapeAttr(bk.created_at_iso || '')} · ${escapeAttr(bk.size_human || '')} · ${bk.users_count || 0} users</p>
+                      </div>
+                      <div class="flex items-center gap-1.5 shrink-0">
+                        <a href="/api/admin/backup/download?filename=${encodeURIComponent(bk.filename)}" download class="p-2 rounded-lg bg-zinc-800 text-zinc-300 text-xs hover:text-white" title="Download snapshot">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        </a>
+                        <button onclick="if(confirm('Restore database from ${escapeAttr(bk.filename)}? This will replace current active state with this snapshot.'))modRestoreNamedBackup('${escapeAttr(bk.filename)}')" class="px-2.5 py-1.5 rounded-lg bg-rose-600/20 border border-rose-500/30 text-rose-300 text-xs font-semibold hover:bg-rose-600 hover:text-white transition">
+                          Restore
+                        </button>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              `}
+            </div>
+          </div>
+        `;
       } else {
         content = (d.logs || []).map(l => `
           <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800 space-y-1">
@@ -2488,6 +2630,7 @@
             ${tabBtn('posts', 'All posts')}
             ${tabBtn('users', 'Accounts')}
             ${tabBtn('institutions', 'Institutions')}
+            ${tabBtn('backups', 'Database & Backups')}
             ${tabBtn('logs', 'Log')}
           </nav>
           <div class="space-y-2.5">${content}</div>

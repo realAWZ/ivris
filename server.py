@@ -10,7 +10,9 @@ import os
 import random
 import re
 import secrets
+import shutil
 import sqlite3
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -23,9 +25,25 @@ except Exception:
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
-UPLOADS_DIR = WEB_DIR / "uploads"
-DB_PATH = BASE_DIR / "ivris.db"
 
+DATA_DIR_ENV = os.environ.get("DATA_DIR")
+if DATA_DIR_ENV and Path(DATA_DIR_ENV).exists():
+    DATA_ROOT = Path(DATA_DIR_ENV)
+elif Path("/data").exists():
+    DATA_ROOT = Path("/data")
+else:
+    DATA_ROOT = BASE_DIR
+
+DB_PATH = Path(os.environ.get("DB_PATH", DATA_ROOT / "ivris.db"))
+BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", DATA_ROOT / "backups"))
+UPLOADS_DIR = Path(
+    os.environ.get(
+        "UPLOADS_DIR",
+        DATA_ROOT / "uploads" if DATA_ROOT != BASE_DIR else WEB_DIR / "uploads",
+    )
+)
+
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_MOD_EMAIL = os.environ.get("IVRIS_MOD_EMAIL", "moderator@ivris.app")
@@ -316,213 +334,198 @@ def init_db():
             (hash_pw(DEFAULT_MOD_PASSWORD), mod_row["id"]),
         )
 
-    # Seed full prototype community: accounts, mutual connections, posts with music, and active stories
-    seed_demo_community(cur)
-
     conn.commit()
     conn.close()
 
 
-def seed_demo_community(cur):
-    now_ts = int(time.time())
-    default_pw = hash_pw("Ivris2026!")
+def create_database_backup(label: str = "auto") -> dict:
+    """
+    Creates an atomic, consistent SQLite snapshot of the live database using
+    SQLite's online backup API without interrupting active transactions.
+    Also updates backups/ivris_latest.db as the primary restore image.
+    """
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        ts_str = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"ivris_backup_{ts_str}_{label}.db"
+        dest_path = BACKUP_DIR / filename
+        latest_path = BACKUP_DIR / "ivris_latest.db"
 
-    demo_users = [
-        ("usr_971b1488ae5524d0", "azosche1@gmail.com", "awz", "Ayden Zosche", "Building Ivris • Blair Academy & Tech", "", "personal", 0),
-        ("usr_9c25f7204a8cf5c1", "zoscha@blair.edu", "zoscha", "Zoscha", "Blair ’24 • Film & Architecture", "", "personal", 0),
-        ("usr_claireb", "claire@umich.edu", "claireb", "Claire Bennett", "Michigan ’22 • Product design, photography, film", "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80", "personal", 0),
-        ("usr_lucasmeyer", "lucas@newtrier.org", "lucasmeyer", "Lucas Meyer", "New Trier ’18 • Sound engineer & cyclist", "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80", "personal", 0),
-        ("usr_mayalin", "mayalin@umich.edu", "mayalin", "Maya Lin", "Michigan ’22 • Architecture & urban design", "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80", "personal", 0),
-        ("usr_elena_r", "elena@stanford.edu", "elena_r", "Elena Rostova", "Ceramics & studio design • SF", "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80", "personal", 0),
-        ("usr_samir_p", "samir@nyu.edu", "samir.p", "Samir Patel", "Software & coffee roasts • NYC", "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80", "personal", 0),
-        ("usr_hannahk", "hannah@columbia.edu", "hannahk", "Hannah Kim", "Brooklyn, NY • Visual arts", "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=300&auto=format&fit=crop&q=80", "personal", 0),
-        ("usr_jvance", "jvance@umich.edu", "jvance", "Jordan Vance", "Michigan ’22 • Marathoner", "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=300&auto=format&fit=crop&q=80", "personal", 0),
-        ("inst_michiganalumni", "alumni@umich.edu", "michiganalumni", "University of Michigan Alumni", "Official University of Michigan Alumni Community", "https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=300&auto=format&fit=crop&q=80", "institution", 1),
-        ("inst_stanford", "alumni@stanford.edu", "stanford", "Stanford University Alumni", "Official Stanford University Community", "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=300&auto=format&fit=crop&q=80", "institution", 1),
-        ("inst_blair", "alumni@blair.edu", "blair", "Blair Academy Alumni", "Official Blair Academy Community & Network", "https://images.unsplash.com/photo-1562774053-701939374585?w=300&auto=format&fit=crop&q=80", "institution", 1),
+        if not DB_PATH.exists() or DB_PATH.stat().st_size == 0:
+            return {"error": "Live database file does not exist yet."}
+
+        src = sqlite3.connect(DB_PATH)
+        dst = sqlite3.connect(dest_path)
+        with dst:
+            src.backup(dst)
+        dst.close()
+
+        # Update latest pointer backup image
+        dst_latest = sqlite3.connect(latest_path)
+        with dst_latest:
+            src.backup(dst_latest)
+        dst_latest.close()
+        src.close()
+
+        prune_old_backups(keep=30)
+        info = get_backup_file_info(dest_path)
+        print(f"[BACKUP ENGINE] Snapshot created: {filename} ({info.get('size_human', '')})")
+        return info
+    except Exception as e:
+        print(f"[BACKUP ENGINE] Failed to create backup: {e}")
+        return {"error": str(e)}
+
+
+def prune_old_backups(keep: int = 30):
+    try:
+        files = [
+            f
+            for f in BACKUP_DIR.glob("ivris_backup_*.db")
+            if f.is_file() and f.name != "ivris_latest.db"
+        ]
+        files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        for f in files[keep:]:
+            try:
+                f.unlink()
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[BACKUP ENGINE] Error pruning backups: {e}")
+
+
+def get_backup_file_info(fpath: Path) -> dict:
+    if not fpath.exists():
+        return {}
+    stat = fpath.stat()
+    size_bytes = stat.st_size
+    size_kb = round(size_bytes / 1024, 1)
+    size_human = (
+        f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb / 1024, 2)} MB"
+    )
+    users_count = 0
+    posts_count = 0
+    try:
+        c = sqlite3.connect(fpath)
+        users_count = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        posts_count = c.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+        c.close()
+    except Exception:
+        pass
+    return {
+        "filename": fpath.name,
+        "filepath": str(fpath),
+        "size_bytes": size_bytes,
+        "size_human": size_human,
+        "created_at": int(stat.st_mtime),
+        "created_at_iso": time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)
+        ),
+        "users_count": users_count,
+        "posts_count": posts_count,
+    }
+
+
+def list_backups() -> list[dict]:
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    items = []
+    latest = BACKUP_DIR / "ivris_latest.db"
+    if latest.exists():
+        info = get_backup_file_info(latest)
+        info["is_latest_pointer"] = True
+        items.append(info)
+
+    files = [
+        f
+        for f in BACKUP_DIR.glob("ivris_backup_*.db")
+        if f.is_file() and f.name != "ivris_latest.db"
     ]
+    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    for f in files:
+        items.append(get_backup_file_info(f))
+    return items
 
-    for uid, email, handle, dname, bio, avatar, atype, is_inst in demo_users:
-        cur.execute(
-            """
-            INSERT OR IGNORE INTO users (id, email, password_hash, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?)
-            """,
-            (uid, email, default_pw, handle, dname, bio, avatar, atype, is_inst, json.dumps(DEFAULT_SETTINGS), now_ts - 86400 * 3),
-        )
 
-    # Demo Connections
-    demo_conns = [
-        ("conn_awz_zoscha", "usr_971b1488ae5524d0", "usr_9c25f7204a8cf5c1", "accepted"),
-        ("conn_awz_maya", "usr_971b1488ae5524d0", "usr_mayalin", "accepted"),
-        ("conn_awz_elena", "usr_971b1488ae5524d0", "usr_elena_r", "accepted"),
-        ("conn_zoscha_maya", "usr_9c25f7204a8cf5c1", "usr_mayalin", "accepted"),
-        ("conn_zoscha_samir", "usr_9c25f7204a8cf5c1", "usr_samir_p", "accepted"),
-        ("conn_claire_awz", "usr_claireb", "usr_971b1488ae5524d0", "pending"),
-        ("conn_lucas_awz", "usr_lucasmeyer", "usr_971b1488ae5524d0", "pending"),
-        ("conn_claire_zoscha", "usr_claireb", "usr_9c25f7204a8cf5c1", "pending"),
-    ]
-    for cid, r_id, a_id, st in demo_conns:
-        cur.execute(
-            """
-            INSERT OR IGNORE INTO connections (id, requester_id, addressee_id, status, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (cid, r_id, a_id, st, now_ts - 3600 * 12),
-        )
+def restore_database_from_file(backup_path: Path) -> tuple[bool, str]:
+    if not backup_path.exists():
+        return False, f"Backup file {backup_path.name} not found."
+    try:
+        test_conn = sqlite3.connect(backup_path)
+        users_count = test_conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        test_conn.close()
 
-    # Feed Posts with Music
-    demo_posts = [
-        (
-            "post_seed_maya_1",
-            "usr_mayalin",
-            "photo_post",
-            "https://images.unsplash.com/photo-1513694203232-719a280e022f?w=1000&auto=format&fit=crop&q=80",
-            json.dumps(["https://images.unsplash.com/photo-1513694203232-719a280e022f?w=1000&auto=format&fit=crop&q=80", "https://images.unsplash.com/photo-1497366216548-37526070297c?w=1000&auto=format&fit=crop&q=80"]),
-            "Morning studio light in Ann Arbor ☕️ drafting new pavilion concepts.",
-            "Ann Arbor, MI",
-            json.dumps({
-                "id": "1",
-                "title": "Golden Hour",
-                "artist": "JVKE",
-                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/bf/d7/ee/bfd7ee2a-7d49-a299-4700-1175aa667fc4/196589255755.jpg/100x100bb.jpg",
-                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview112/v4/cd/e1/9f/cde19fca-bb98-251c-c9d3-5dc21124233d/mzaf_10027179047355026046.plus.aac.p.m4a",
-                "start_time": 0
-            }),
-            now_ts - 3600 * 3,
-        ),
-        (
-            "post_seed_elena_1",
-            "usr_elena_r",
-            "photo_post",
-            "https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?w=1000&auto=format&fit=crop&q=80",
-            json.dumps(["https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?w=1000&auto=format&fit=crop&q=80"]),
-            "Glazing day at the kiln. New stoneware pieces coming together.",
-            "Mission District, SF",
-            json.dumps({
-                "id": "2",
-                "title": "As It Was",
-                "artist": "Harry Styles",
-                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/9b/6c/c2/9b6cc214-ee18-3580-b747-975949a24467/886449989063.jpg/100x100bb.jpg",
-                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview122/v4/4a/12/35/4a1235fe-2fa3-20aa-6272-132d43bf6ce9/mzaf_472400305885236717.plus.aac.p.m4a",
-                "start_time": 0
-            }),
-            now_ts - 3600 * 6,
-        ),
-        (
-            "post_seed_blair_1",
-            "inst_blair",
-            "photo_post",
-            "https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=1000&auto=format&fit=crop&q=80",
-            json.dumps(["https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=1000&auto=format&fit=crop&q=80", "https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1000&auto=format&fit=crop&q=80"]),
-            "Autumn on the hill. Welcome back alumni and students for Homecoming weekend! 🍂",
-            "Blairstown, NJ",
-            json.dumps({
-                "id": "3",
-                "title": "Daylight",
-                "artist": "David Kushner",
-                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music116/v4/65/59/e6/6559e663-e5e3-6a2d-ec30-4e789f2d1e04/197188722950.jpg/100x100bb.jpg",
-                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview116/v4/05/27/c5/0527c5fa-d4f1-6a2c-f6ef-e23a49931885/mzaf_6135802377289569476.plus.aac.p.m4a",
-                "start_time": 0
-            }),
-            now_ts - 3600 * 10,
-        ),
-        (
-            "post_seed_samir_1",
-            "usr_samir_p",
-            "photo_post",
-            "https://images.unsplash.com/photo-1498050108023-c5249f4df085?w=1000&auto=format&fit=crop&q=80",
-            json.dumps(["https://images.unsplash.com/photo-1498050108023-c5249f4df085?w=1000&auto=format&fit=crop&q=80"]),
-            "Shipped v2.0 from Soho today. Coffee counter coding session.",
-            "SoHo, New York",
-            json.dumps({
-                "id": "4",
-                "title": "Passionfruit",
-                "artist": "Drake",
-                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/6b/c5/33/6bc533b6-ae38-3498-8ec4-d621946a0669/17UMGIM86060.rgb.jpg/100x100bb.jpg",
-                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview125/v4/35/d5/92/35d59296-6e27-6cf3-e9bf-0b1aeb0eb9d6/mzaf_18210332840621415694.plus.aac.p.m4a",
-                "start_time": 0
-            }),
-            now_ts - 3600 * 14,
-        ),
-    ]
-    for pid, aid, kind, murl, urls_json, cap, loc, mus_json, created in demo_posts:
-        cur.execute(
-            """
-            INSERT OR IGNORE INTO posts (id, author_id, media_kind, media_url, media_urls_json, caption, location_label, music_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (pid, aid, kind, murl, urls_json, cap, loc, mus_json, created),
-        )
+        if DB_PATH.exists() and DB_PATH.stat().st_size > 0:
+            create_database_backup("pre_restore_safety")
 
-    # Active Stories with Music (active for 24 hours)
-    demo_stories = [
-        (
-            "story_seed_maya_1",
-            "usr_mayalin",
-            "video_story",
-            "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=800&auto=format&fit=crop&q=80",
-            json.dumps(["https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=800&auto=format&fit=crop&q=80"]),
-            "Ann Arbor trail sunrise ☀️",
-            "Ann Arbor, MI",
-            json.dumps({
-                "id": "1",
-                "title": "Golden Hour",
-                "artist": "JVKE",
-                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/bf/d7/ee/bfd7ee2a-7d49-a299-4700-1175aa667fc4/196589255755.jpg/100x100bb.jpg",
-                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview112/v4/cd/e1/9f/cde19fca-bb98-251c-c9d3-5dc21124233d/mzaf_10027179047355026046.plus.aac.p.m4a",
-                "start_time": 0
-            }),
-            now_ts + 86400,
-            now_ts - 1800,
-        ),
-        (
-            "story_seed_elena_1",
-            "usr_elena_r",
-            "video_story",
-            "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?w=800&auto=format&fit=crop&q=80",
-            json.dumps(["https://images.unsplash.com/photo-1519710164239-da123dc03ef4?w=800&auto=format&fit=crop&q=80"]),
-            "Studio afternoon",
-            "San Francisco, CA",
-            json.dumps({
-                "id": "2",
-                "title": "As It Was",
-                "artist": "Harry Styles",
-                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/9b/6c/c2/9b6cc214-ee18-3580-b747-975949a24467/886449989063.jpg/100x100bb.jpg",
-                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview122/v4/4a/12/35/4a1235fe-2fa3-20aa-6272-132d43bf6ce9/mzaf_472400305885236717.plus.aac.p.m4a",
-                "start_time": 0
-            }),
-            now_ts + 86400,
-            now_ts - 3600,
-        ),
-        (
-            "story_seed_blair_1",
-            "inst_blair",
-            "video_story",
-            "https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=800&auto=format&fit=crop&q=80",
-            json.dumps(["https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=800&auto=format&fit=crop&q=80"]),
-            "Morning walk past Sharpe House 🏛️",
-            "Blairstown, NJ",
-            json.dumps({
-                "id": "3",
-                "title": "Daylight",
-                "artist": "David Kushner",
-                "artwork_url": "https://is1-ssl.mzstatic.com/image/thumb/Music116/v4/65/59/e6/6559e663-e5e3-6a2d-ec30-4e789f2d1e04/197188722950.jpg/100x100bb.jpg",
-                "preview_url": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview116/v4/05/27/c5/0527c5fa-d4f1-6a2c-f6ef-e23a49931885/mzaf_6135802377289569476.plus.aac.p.m4a",
-                "start_time": 0
-            }),
-            now_ts + 86400,
-            now_ts - 5400,
-        ),
-    ]
-    for sid, aid, kind, murl, urls_json, cap, loc, mus_json, exp, created in demo_stories:
-        cur.execute(
-            """
-            INSERT OR IGNORE INTO posts (id, author_id, media_kind, media_url, media_urls_json, caption, location_label, music_json, expires_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (sid, aid, kind, murl, urls_json, cap, loc, mus_json, exp, created),
-        )
+        src = sqlite3.connect(backup_path)
+        dst = sqlite3.connect(DB_PATH)
+        with dst:
+            src.backup(dst)
+        dst.close()
+        src.close()
+
+        init_db()
+        msg = f"Database restored from {backup_path.name} with {users_count} registered accounts."
+        print(f"[BACKUP ENGINE] {msg}")
+        return True, msg
+    except Exception as e:
+        err = f"Failed to restore backup: {e}"
+        print(f"[BACKUP ENGINE] {err}")
+        return False, err
+
+
+def auto_restore_if_needed():
+    """
+    On container startup, checks if the live database is missing or empty.
+    If so, immediately restores from the latest persistent snapshot.
+    """
+    try:
+        should_restore = False
+        if not DB_PATH.exists() or DB_PATH.stat().st_size == 0:
+            should_restore = True
+        else:
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                u_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+                conn.close()
+                if u_count == 0:
+                    should_restore = True
+            except Exception:
+                should_restore = True
+
+        if should_restore:
+            latest = BACKUP_DIR / "ivris_latest.db"
+            if latest.exists() and latest.stat().st_size > 0:
+                print(f"[BACKUP ENGINE] Database empty/missing. Auto-restoring from {latest.name}...")
+                restore_database_from_file(latest)
+            else:
+                backups = [
+                    f for f in BACKUP_DIR.glob("ivris_backup_*.db") if f.is_file()
+                ]
+                if backups:
+                    backups.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                    print(f"[BACKUP ENGINE] Auto-restoring from newest snapshot {backups[0].name}...")
+                    restore_database_from_file(backups[0])
+    except Exception as e:
+        print(f"[BACKUP ENGINE] Auto-restore error: {e}")
+
+
+def start_backup_scheduler():
+    def _run():
+        time.sleep(20)
+        try:
+            create_database_backup("startup")
+        except Exception as e:
+            print(f"[BACKUP SCHEDULER] Startup backup failed: {e}")
+
+        while True:
+            time.sleep(3600)  # Hourly automated snapshot
+            try:
+                create_database_backup("hourly")
+            except Exception as e:
+                print(f"[BACKUP SCHEDULER] Hourly backup failed: {e}")
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
 
 
 def inspect_image_bytes_for_nudity(raw_bytes: bytes) -> tuple[bool, str]:
@@ -816,6 +819,11 @@ def build_moderation_dashboard_payload(conn, user) -> dict:
         "logs": logs,
         "users": users_list,
         "institution_applications": inst_apps,
+        "backup_status": {
+            "db_path": str(DB_PATH),
+            "db_info": get_backup_file_info(DB_PATH),
+            "backups": list_backups(),
+        },
     }
 
 
@@ -912,6 +920,51 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         {"error": "Moderator account authorization required."}, 403
                     )
                 return self.send_json(build_moderation_dashboard_payload(conn, user))
+            finally:
+                conn.close()
+
+        if parsed.path == "/api/admin/backups":
+            conn = get_db()
+            try:
+                user = self.get_current_user(conn)
+                if not user or user.get("account_type") != "moderator":
+                    return self.send_json({"error": "Unauthorized"}, 403)
+                return self.send_json({
+                    "db_info": get_backup_file_info(DB_PATH),
+                    "backups": list_backups(),
+                })
+            finally:
+                conn.close()
+
+        if parsed.path == "/api/admin/backup/download":
+            conn = get_db()
+            try:
+                user = self.get_current_user(conn)
+                if not user or user.get("account_type") != "moderator":
+                    return self.send_json({"error": "Unauthorized"}, 403)
+                qs = urllib.parse.parse_qs(parsed.query)
+                requested_file = qs.get("filename", [""])[0]
+                target_file = DB_PATH
+                download_name = f"ivris_database_{time.strftime('%Y%m%d_%H%M%S')}.db"
+                if requested_file:
+                    safe_filename = os.path.basename(requested_file)
+                    cand = BACKUP_DIR / safe_filename
+                    if cand.exists() and cand.is_file():
+                        target_file = cand
+                        download_name = safe_filename
+                if not target_file.exists():
+                    return self.send_json({"error": "File not found"}, 404)
+
+                content = target_file.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-sqlite3")
+                self.send_header(
+                    "Content-Disposition", f'attachment; filename="{download_name}"'
+                )
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
             finally:
                 conn.close()
 
@@ -1438,12 +1491,42 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({"error": "Unauthorized"}, 401)
             uid = user["id"]
 
-            # Moderator-only endpoints
-            if parsed.path.startswith("/api/moderation/"):
+            # Moderator / Admin endpoints
+            if parsed.path.startswith("/api/moderation/") or parsed.path.startswith("/api/admin/"):
                 if user.get("account_type") != "moderator":
                     return self.send_json(
                         {"error": "Moderator account authorization required."}, 403
                     )
+
+                if parsed.path == "/api/admin/backup/create":
+                    label = (body.get("label") or "manual").strip()
+                    info = create_database_backup(label)
+                    return self.send_json({"ok": True, "backup": info})
+
+                if parsed.path == "/api/admin/backup/restore":
+                    filename = (body.get("filename") or "").strip()
+                    if filename:
+                        safe_filename = os.path.basename(filename)
+                        cand = BACKUP_DIR / safe_filename
+                        success, msg = restore_database_from_file(cand)
+                        if success:
+                            return self.send_json({"ok": True, "message": msg})
+                        return self.send_json({"error": msg}, 400)
+
+                    raw_b64 = body.get("backup_base64")
+                    if raw_b64:
+                        try:
+                            raw_bytes = base64.b64decode(raw_b64)
+                            temp_restore = BACKUP_DIR / f"temp_upload_{time.strftime('%Y%m%d_%H%M%S')}.db"
+                            temp_restore.write_bytes(raw_bytes)
+                            success, msg = restore_database_from_file(temp_restore)
+                            if success:
+                                return self.send_json({"ok": True, "message": msg})
+                            return self.send_json({"error": msg}, 400)
+                        except Exception as e:
+                            return self.send_json({"error": f"Failed to restore uploaded database: {e}"}, 400)
+
+                    return self.send_json({"error": "No backup specified to restore."}, 400)
 
                 if parsed.path == "/api/moderation/takedown":
                     post_id = (body.get("post_id") or "").strip()
@@ -1841,7 +1924,10 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    auto_restore_if_needed()
     init_db()
+    create_database_backup("boot")
+    start_backup_scheduler()
     port = int(os.environ.get("PORT", "3000"))
     server = http.server.ThreadingHTTPServer(("0.0.0.0", port), IvrisHandler)
     print(f"Ivris Backend & Web Server running on http://0.0.0.0:{port}", flush=True)
