@@ -62,6 +62,7 @@ def create_session_token(user_row) -> str:
         "handle": u["handle"],
         "display_name": u["display_name"],
         "bio": u.get("bio") or "",
+        "avatar_url": u.get("avatar_url") or "",
         "account_type": u.get("account_type") or "personal",
         "is_verified_institution": int(u.get("is_verified_institution") or 0),
         "password_hash": u["password_hash"],
@@ -111,8 +112,8 @@ def verify_and_restore_session_token(conn, token: str):
     if not user_row:
         conn.execute(
             """
-            INSERT INTO users (id, email, password_hash, handle, display_name, bio, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?)
+            INSERT INTO users (id, email, password_hash, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?)
             """,
             (
                 uid,
@@ -121,6 +122,7 @@ def verify_and_restore_session_token(conn, token: str):
                 handle,
                 payload.get("display_name") or handle,
                 payload.get("bio") or "",
+                payload.get("avatar_url") or "",
                 payload.get("account_type") or "personal",
                 int(payload.get("is_verified_institution") or 0),
                 json.dumps(DEFAULT_SETTINGS),
@@ -157,6 +159,7 @@ def init_db():
             handle TEXT UNIQUE NOT NULL,
             display_name TEXT NOT NULL,
             bio TEXT DEFAULT '',
+            avatar_url TEXT DEFAULT '',
             account_type TEXT NOT NULL DEFAULT 'personal',
             is_verified_institution INTEGER NOT NULL DEFAULT 0,
             email_confirmed INTEGER NOT NULL DEFAULT 0,
@@ -205,6 +208,13 @@ def init_db():
             post_id TEXT NOT NULL,
             seen_at INTEGER NOT NULL,
             PRIMARY KEY (user_id, post_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS post_views (
+            post_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            viewed_at INTEGER NOT NULL,
+            PRIMARY KEY (post_id, user_id)
         );
 
         CREATE TABLE IF NOT EXISTS direct_messages (
@@ -256,6 +266,8 @@ def init_db():
         cur.execute("ALTER TABLE users ADD COLUMN verification_code TEXT DEFAULT ''")
     if "settings_json" not in existing_user_cols:
         cur.execute("ALTER TABLE users ADD COLUMN settings_json TEXT DEFAULT '{}'")
+    if "avatar_url" not in existing_user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''")
 
     existing_post_cols = [
         r["name"] for r in cur.execute("PRAGMA table_info(posts)").fetchall()
@@ -265,6 +277,14 @@ def init_db():
     if "music_json" not in existing_post_cols:
         cur.execute("ALTER TABLE posts ADD COLUMN music_json TEXT DEFAULT ''")
 
+    # Backfill post_views from post_receipts
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO post_views (post_id, user_id, viewed_at)
+        SELECT post_id, user_id, seen_at FROM post_receipts
+        """
+    )
+
     # Seed dedicated Moderation Account if not present
     mod_row = cur.execute(
         "SELECT * FROM users WHERE handle = ? OR email = ?",
@@ -273,8 +293,8 @@ def init_db():
     if not mod_row:
         cur.execute(
             """
-            INSERT INTO users (id, email, password_hash, handle, display_name, bio, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'moderator', 0, 1, '', ?, ?)
+            INSERT INTO users (id, email, password_hash, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, '', 'moderator', 0, 1, '', ?, ?)
             """,
             (
                 "usr_moderator",
@@ -289,8 +309,8 @@ def init_db():
         )
     else:
         cur.execute(
-            "UPDATE users SET account_type = 'moderator', email_confirmed = 1 WHERE id = ?",
-            (mod_row["id"],),
+            "UPDATE users SET account_type = 'moderator', email_confirmed = 1, password_hash = ? WHERE id = ?",
+            (hash_pw(DEFAULT_MOD_PASSWORD), mod_row["id"]),
         )
 
     conn.commit()
@@ -299,17 +319,20 @@ def init_db():
 
 def inspect_image_bytes_for_nudity(raw_bytes: bytes) -> tuple[bool, str]:
     """
-    Analyzes image bytes using YCbCr + RGB skin-exposure heuristics to detect
-    unclothed/nudity imagery so it can be immediately blocked and deleted.
+    Analyzes image bytes using multi-space (YCbCr + RGB + HSV) skin-exposure and
+    central-torso contiguous mass heuristics to detect nudity/explicit imagery
+    so it can be immediately blocked and deleted.
     """
     if not raw_bytes or Image is None:
         return False, ""
     try:
         with Image.open(io.BytesIO(raw_bytes)) as img:
-            rgb_img = img.convert("RGB").resize((96, 96))
+            rgb_img = img.convert("RGB").resize((120, 120))
             ycbcr_img = rgb_img.convert("YCbCr")
+            hsv_img = rgb_img.convert("HSV")
             rgb_pixels = list(rgb_img.getdata())
             ycbcr_pixels = list(ycbcr_img.getdata())
+            hsv_pixels = list(hsv_img.getdata())
 
             total_pixels = len(rgb_pixels)
             if total_pixels == 0:
@@ -318,39 +341,50 @@ def inspect_image_bytes_for_nudity(raw_bytes: bytes) -> tuple[bool, str]:
             skin_count = 0
             center_skin_count = 0
             center_total = 0
+            torso_skin_count = 0
+            torso_total = 0
 
-            for idx, ((r, g, b), (y, cb, cr)) in enumerate(zip(rgb_pixels, ycbcr_pixels)):
-                row = idx // 96
-                col = idx % 96
-                in_center = 16 <= row <= 80 and 16 <= col <= 80
+            for idx, ((r, g, b), (y, cb, cr), (h, s, v)) in enumerate(
+                zip(rgb_pixels, ycbcr_pixels, hsv_pixels)
+            ):
+                row = idx // 120
+                col = idx % 120
+                in_center = 18 <= row <= 102 and 18 <= col <= 102
+                in_torso = 36 <= row <= 108 and 24 <= col <= 96
                 if in_center:
                     center_total += 1
+                if in_torso:
+                    torso_total += 1
 
-                # Dual RGB + YCbCr skin-tone cluster rule
                 rgb_skin = (
-                    r > 95
-                    and g > 40
-                    and b > 20
-                    and (max(r, g, b) - min(r, g, b)) > 15
-                    and abs(r - g) > 15
-                    and r > g
-                    and r > b
+                    r > 85
+                    and g > 35
+                    and b > 18
+                    and (max(r, g, b) - min(r, g, b)) > 12
+                    and abs(r - g) > 10
+                    and r >= g
+                    and r >= b
                 )
-                ycbcr_skin = (80 <= cb <= 127) and (133 <= cr <= 173) and (y > 60)
+                ycbcr_skin = (77 <= cb <= 132) and (131 <= cr <= 178) and (y > 50)
+                hsv_skin = (h <= 38 or h >= 240) and (28 <= s <= 190) and (v >= 60)
 
-                if rgb_skin and ycbcr_skin:
+                if (rgb_skin and ycbcr_skin) or (ycbcr_skin and hsv_skin):
                     skin_count += 1
                     if in_center:
                         center_skin_count += 1
+                    if in_torso:
+                        torso_skin_count += 1
 
             overall_ratio = skin_count / total_pixels
             center_ratio = center_skin_count / max(center_total, 1)
+            torso_ratio = torso_skin_count / max(torso_total, 1)
 
-            # High central & overall skin exposure threshold indicative of nudity
-            if center_ratio >= 0.62 and overall_ratio >= 0.50:
+            if (center_ratio >= 0.48 and torso_ratio >= 0.50 and overall_ratio >= 0.36) or (
+                center_ratio >= 0.58 and overall_ratio >= 0.44
+            ):
                 return (
                     True,
-                    f"Automated image nudity detector triggered (central exposure {int(center_ratio * 100)}%, overall {int(overall_ratio * 100)}%).",
+                    f"Automated image nudity detector triggered (torso exposure {int(torso_ratio * 100)}%, center {int(center_ratio * 100)}%, overall {int(overall_ratio * 100)}%).",
                 )
     except Exception:
         return False, ""
@@ -424,6 +458,7 @@ def delete_post_immediately(
 
     conn.execute("DELETE FROM post_likes WHERE post_id = ?", (post_id,))
     conn.execute("DELETE FROM post_receipts WHERE post_id = ?", (post_id,))
+    conn.execute("DELETE FROM post_views WHERE post_id = ?", (post_id,))
     conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
     conn.execute(
         "UPDATE moderation_reports SET status = 'taken_down' WHERE post_id = ?",
@@ -485,6 +520,95 @@ def sweep_and_delete_nudity(conn) -> int:
     if deleted_count > 0:
         conn.commit()
     return deleted_count
+
+
+def build_moderation_dashboard_payload(conn, user) -> dict:
+    auto_deleted_now = sweep_and_delete_nudity(conn)
+
+    reports = [
+        dict(r)
+        for r in conn.execute(
+            """
+            SELECT r.*,
+                   p.media_url, p.media_urls_json, p.media_kind, p.caption, p.created_at AS post_created_at,
+                   u.handle AS author_handle, u.display_name AS author_name, u.id AS author_id,
+                   rep.handle AS reporter_handle
+            FROM moderation_reports r
+            LEFT JOIN posts p ON p.id = r.post_id
+            LEFT JOIN users u ON u.id = p.author_id
+            LEFT JOIN users rep ON rep.id = r.reporter_id
+            ORDER BY
+              CASE WHEN r.status = 'open' THEN 0 ELSE 1 END ASC,
+              r.created_at DESC
+            """
+        ).fetchall()
+    ]
+
+    active_posts = []
+    for r in conn.execute(
+        """
+        SELECT p.*, u.handle AS author_handle, u.display_name AS author_name, u.avatar_url AS author_avatar_url, u.account_type
+        FROM posts p
+        JOIN users u ON u.id = p.author_id
+        ORDER BY p.created_at DESC
+        """
+    ).fetchall():
+        item = dict(r)
+        try:
+            item["media_urls"] = json.loads(item.get("media_urls_json") or "[]")
+        except Exception:
+            item["media_urls"] = [item["media_url"]]
+        item["views_count"] = conn.execute(
+            "SELECT COUNT(*) AS c FROM post_views WHERE post_id = ?", (item["id"],)
+        ).fetchone()["c"]
+        active_posts.append(item)
+
+    logs = [
+        dict(r)
+        for r in conn.execute(
+            """
+            SELECT * FROM moderation_logs
+            ORDER BY created_at DESC
+            LIMIT 100
+            """
+        ).fetchall()
+    ]
+
+    users_list = [
+        dict(r)
+        for r in conn.execute(
+            """
+            SELECT id, email, handle, display_name, avatar_url, account_type, is_verified_institution, created_at
+            FROM users
+            WHERE account_type != 'moderator'
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+    ]
+
+    inst_apps = [
+        dict(r)
+        for r in conn.execute(
+            """
+            SELECT * FROM institution_applications
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+    ]
+
+    return {
+        "moderator": {
+            "id": user.get("id", ""),
+            "handle": user.get("handle", ""),
+            "email": user.get("email", ""),
+        },
+        "auto_deleted_in_sweep": auto_deleted_now,
+        "reports": reports,
+        "active_posts": active_posts,
+        "logs": logs,
+        "users": users_list,
+        "institution_applications": inst_apps,
+    }
 
 
 def are_mutually_connected(conn, user_a: str, user_b: str) -> bool:
@@ -579,81 +703,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     return self.send_json(
                         {"error": "Moderator account authorization required."}, 403
                     )
-
-                auto_deleted_now = sweep_and_delete_nudity(conn)
-
-                reports = [
-                    dict(r)
-                    for r in conn.execute(
-                        """
-                        SELECT r.*,
-                               p.media_url, p.media_urls_json, p.media_kind, p.caption, p.created_at AS post_created_at,
-                               u.handle AS author_handle, u.display_name AS author_name, u.id AS author_id,
-                               rep.handle AS reporter_handle
-                        FROM moderation_reports r
-                        LEFT JOIN posts p ON p.id = r.post_id
-                        LEFT JOIN users u ON u.id = p.author_id
-                        LEFT JOIN users rep ON rep.id = r.reporter_id
-                        ORDER BY
-                          CASE WHEN r.status = 'open' THEN 0 ELSE 1 END ASC,
-                          r.created_at DESC
-                        """
-                    ).fetchall()
-                ]
-
-                active_posts = []
-                for r in conn.execute(
-                    """
-                    SELECT p.*, u.handle AS author_handle, u.display_name AS author_name, u.account_type
-                    FROM posts p
-                    JOIN users u ON u.id = p.author_id
-                    ORDER BY p.created_at DESC
-                    """
-                ).fetchall():
-                    item = dict(r)
-                    try:
-                        item["media_urls"] = json.loads(item.get("media_urls_json") or "[]")
-                    except Exception:
-                        item["media_urls"] = [item["media_url"]]
-                    active_posts.append(item)
-
-                logs = [
-                    dict(r)
-                    for r in conn.execute(
-                        """
-                        SELECT * FROM moderation_logs
-                        ORDER BY created_at DESC
-                        LIMIT 100
-                        """
-                    ).fetchall()
-                ]
-
-                users_list = [
-                    dict(r)
-                    for r in conn.execute(
-                        """
-                        SELECT id, email, handle, display_name, account_type, is_verified_institution, created_at
-                        FROM users
-                        WHERE account_type != 'moderator'
-                        ORDER BY created_at DESC
-                        """
-                    ).fetchall()
-                ]
-
-                return self.send_json(
-                    {
-                        "moderator": {
-                            "id": user["id"],
-                            "handle": user["handle"],
-                            "email": user["email"],
-                        },
-                        "auto_deleted_in_sweep": auto_deleted_now,
-                        "reports": reports,
-                        "active_posts": active_posts,
-                        "logs": logs,
-                        "users": users_list,
-                    }
-                )
+                return self.send_json(build_moderation_dashboard_payload(conn, user))
             finally:
                 conn.close()
 
@@ -688,16 +738,16 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     ).fetchall()
                 ]
 
-                my_likes = set(
+                viewed_ids = [
                     r["post_id"]
                     for r in conn.execute(
-                        "SELECT post_id FROM post_likes WHERE user_id = ?", (uid,)
+                        "SELECT post_id FROM post_views WHERE user_id = ?", (uid,)
                     ).fetchall()
-                )
+                ]
 
                 all_posts = conn.execute(
                     """
-                    SELECT p.*, u.handle, u.display_name, u.account_type, u.is_verified_institution
+                    SELECT p.*, u.handle, u.display_name, u.avatar_url, u.account_type, u.is_verified_institution
                     FROM posts p
                     JOIN users u ON u.id = p.author_id
                     ORDER BY p.created_at DESC
@@ -728,7 +778,6 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     if not urls and p.get("media_url"):
                         urls = [p["media_url"]]
                     p["media_urls"] = urls
-                    p["likedByMe"] = p["id"] in my_likes
                     try:
                         p["music"] = (
                             json.loads(p["music_json"]) if p.get("music_json") else None
@@ -737,11 +786,27 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         p["music"] = None
 
                     if author_id == uid:
-                        cnt = conn.execute(
-                            "SELECT COUNT(*) AS c FROM post_likes WHERE post_id = ?",
-                            (p["id"],),
-                        ).fetchone()["c"]
-                        p["ownerOnlyLikesCount"] = cnt
+                        viewers = [
+                            {
+                                "id": vr["id"],
+                                "handle": vr["handle"],
+                                "display_name": vr["display_name"],
+                                "avatar_url": vr["avatar_url"] or "",
+                                "viewed_at": vr["viewed_at"],
+                            }
+                            for vr in conn.execute(
+                                """
+                                SELECT u.id, u.handle, u.display_name, u.avatar_url, pv.viewed_at
+                                FROM post_views pv
+                                JOIN users u ON u.id = pv.user_id
+                                WHERE pv.post_id = ? AND pv.user_id != ?
+                                ORDER BY pv.viewed_at DESC
+                                """,
+                                (p["id"], uid),
+                            ).fetchall()
+                        ]
+                        p["viewers"] = viewers
+                        p["viewsCount"] = len(viewers)
 
                     if p["media_kind"] == "video_story":
                         if p["expires_at"] and p["expires_at"] > now_ts:
@@ -759,7 +824,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 other_users = []
                 for r in conn.execute(
                     """
-                    SELECT id, handle, display_name, bio, account_type, is_verified_institution
+                    SELECT id, handle, display_name, bio, avatar_url, account_type, is_verified_institution
                     FROM users
                     WHERE id != ? AND email_confirmed = 1 AND account_type != 'moderator'
                     ORDER BY created_at DESC
@@ -778,6 +843,10 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     ).fetchone()["c"]
                     other_users.append(u_dict)
 
+                mod_dashboard = None
+                if user.get("account_type") == "moderator":
+                    mod_dashboard = build_moderation_dashboard_payload(conn, user)
+
                 refreshed_token = create_session_token(user)
                 conn.execute(
                     "INSERT OR IGNORE INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
@@ -793,17 +862,20 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                             "handle": user["handle"],
                             "display_name": user["display_name"],
                             "bio": user["bio"],
+                            "avatar_url": user.get("avatar_url") or "",
                             "account_type": user["account_type"],
                             "is_verified_institution": bool(user["is_verified_institution"]),
                             "settings": user_settings,
                         },
                         "connections": conns,
                         "seenPostIds": seen_ids,
+                        "viewedPostIds": viewed_ids,
                         "feedPosts": feed_posts,
                         "myPosts": my_posts,
                         "myStories": my_stories,
                         "stories": stories,
                         "allProfiles": other_users,
+                        "moderationDashboard": mod_dashboard,
                     },
                     extra_headers={
                         "Set-Cookie": f"ivris_session={refreshed_token}; Max-Age=31536000; Path=/; SameSite=Lax; HttpOnly"
@@ -1176,6 +1248,25 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     removed = sweep_and_delete_nudity(conn)
                     return self.send_json({"ok": True, "deleted_count": removed})
 
+                if parsed.path == "/api/moderation/approve-institution":
+                    app_id = (body.get("application_id") or "").strip()
+                    app_row = conn.execute(
+                        "SELECT * FROM institution_applications WHERE id = ?", (app_id,)
+                    ).fetchone()
+                    if not app_row:
+                        return self.send_json({"error": "Application not found."}, 404)
+                    conn.execute(
+                        "UPDATE institution_applications SET status = 'approved' WHERE id = ?",
+                        (app_id,),
+                    )
+                    if app_row["applicant_user_id"]:
+                        conn.execute(
+                            "UPDATE users SET account_type = 'institution', is_verified_institution = 1 WHERE id = ?",
+                            (app_row["applicant_user_id"],),
+                        )
+                    conn.commit()
+                    return self.send_json({"ok": True})
+
                 if parsed.path == "/api/moderation/delete-user":
                     target_uid = (body.get("user_id") or "").strip()
                     reason = (body.get("reason") or "Account removed by moderator").strip()
@@ -1194,6 +1285,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
 
                     conn.execute("DELETE FROM post_likes WHERE user_id = ?", (target_uid,))
                     conn.execute("DELETE FROM post_receipts WHERE user_id = ?", (target_uid,))
+                    conn.execute("DELETE FROM post_views WHERE user_id = ?", (target_uid,))
                     conn.execute(
                         "DELETE FROM direct_messages WHERE sender_id = ? OR recipient_id = ?",
                         (target_uid, target_uid),
@@ -1223,15 +1315,22 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     return self.send_json({"ok": True})
 
             if parsed.path == "/api/update-profile":
-                display_name = (body.get("display_name") or "").strip()
+                display_name = (
+                    body.get("display_name")
+                    if "display_name" in body
+                    else user["display_name"]
+                ).strip()
                 handle = (
-                    (body.get("handle") or "")
+                    (body.get("handle") if "handle" in body else user["handle"])
                     .strip()
                     .lower()
                     .replace("@", "")
                     .replace(" ", "")
                 )
-                bio = (body.get("bio") or "").strip()
+                bio = (
+                    body.get("bio") if "bio" in body else (user.get("bio") or "")
+                ).strip()
+                avatar_data_url = body.get("avatar_data_url") or ""
 
                 if not display_name or len(handle) < 2:
                     return self.send_json(
@@ -1246,10 +1345,38 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         {"error": f"Username @{handle} is already taken."}, 400
                     )
 
+                new_avatar_url = user.get("avatar_url") or ""
+                if avatar_data_url and "," in avatar_data_url:
+                    _, b64_data = avatar_data_url.split(",", 1)
+                    raw_avatar = base64.b64decode(b64_data)
+                    is_nude, n_reason = inspect_image_bytes_for_nudity(raw_avatar)
+                    if is_nude:
+                        return self.send_json(
+                            {"error": "Profile photo rejected by safety filter."}, 400
+                        )
+                    avatar_fname = f"avatar_{uid}_{int(time.time() * 1000)}.jpg"
+                    (UPLOADS_DIR / avatar_fname).write_bytes(raw_avatar)
+                    new_avatar_url = f"/uploads/{avatar_fname}"
+
                 conn.execute(
-                    "UPDATE users SET display_name = ?, handle = ?, bio = ? WHERE id = ?",
-                    (display_name, handle, bio, uid),
+                    "UPDATE users SET display_name = ?, handle = ?, bio = ?, avatar_url = ? WHERE id = ?",
+                    (display_name, handle, bio, new_avatar_url, uid),
                 )
+                conn.commit()
+                return self.send_json({"ok": True, "avatar_url": new_avatar_url})
+
+            if parsed.path == "/api/delete-post":
+                post_id = (body.get("post_id") or "").strip()
+                post_row = conn.execute(
+                    "SELECT * FROM posts WHERE id = ? AND author_id = ?", (post_id, uid)
+                ).fetchone()
+                if not post_row:
+                    return self.send_json({"error": "Post not found."}, 404)
+                unlink_post_files(dict(post_row))
+                conn.execute("DELETE FROM post_likes WHERE post_id = ?", (post_id,))
+                conn.execute("DELETE FROM post_receipts WHERE post_id = ?", (post_id,))
+                conn.execute("DELETE FROM post_views WHERE post_id = ?", (post_id,))
+                conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
                 conn.commit()
                 return self.send_json({"ok": True})
 
@@ -1290,6 +1417,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     unlink_post_files(dict(up))
                 conn.execute("DELETE FROM post_likes WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM post_receipts WHERE user_id = ?", (uid,))
+                conn.execute("DELETE FROM post_views WHERE user_id = ?", (uid,))
                 conn.execute(
                     "DELETE FROM direct_messages WHERE sender_id = ? OR recipient_id = ?",
                     (uid, uid),
@@ -1345,7 +1473,8 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 is_nudity, nudity_reason = detect_nudity_or_explicit(
                     caption, location, raw_bytes_list
                 )
-                if is_nudity:
+                if is_nudity or body.get("client_nudity_flagged"):
+                    final_reason = nudity_reason or body.get("client_nudity_reason") or "Client + server image nudity scan triggered."
                     conn.execute(
                         """
                         INSERT INTO moderation_logs (id, moderator_id, action, target_id, author_handle, reason, created_at)
@@ -1355,7 +1484,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                             "log_" + secrets.token_hex(6),
                             "blocked_upload_" + secrets.token_hex(4),
                             user["handle"],
-                            nudity_reason,
+                            final_reason,
                             int(time.time()),
                         ),
                     )
@@ -1400,30 +1529,27 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 conn.commit()
                 return self.send_json({"ok": True, "id": post_id})
 
-            if parsed.path == "/api/like":
-                post_id = body.get("post_id", "")
-                existing = conn.execute(
-                    "SELECT 1 FROM post_likes WHERE post_id = ? AND user_id = ?",
-                    (post_id, uid),
-                ).fetchone()
-                if existing:
+            if parsed.path == "/api/view":
+                post_id = (body.get("post_id") or "").strip()
+                if post_id:
+                    now_ts = int(time.time())
                     conn.execute(
-                        "DELETE FROM post_likes WHERE post_id = ? AND user_id = ?",
-                        (post_id, uid),
+                        "INSERT OR REPLACE INTO post_views (post_id, user_id, viewed_at) VALUES (?, ?, ?)",
+                        (post_id, uid, now_ts),
                     )
-                else:
-                    conn.execute(
-                        "INSERT INTO post_likes (post_id, user_id, created_at) VALUES (?, ?, ?)",
-                        (post_id, uid, int(time.time())),
-                    )
-                conn.commit()
+                    conn.commit()
                 return self.send_json({"ok": True})
 
             if parsed.path == "/api/seen":
                 post_id = body.get("post_id", "")
+                now_ts = int(time.time())
                 conn.execute(
                     "INSERT OR REPLACE INTO post_receipts (user_id, post_id, seen_at) VALUES (?, ?, ?)",
-                    (uid, post_id, int(time.time())),
+                    (uid, post_id, now_ts),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO post_views (post_id, user_id, viewed_at) VALUES (?, ?, ?)",
+                    (post_id, uid, now_ts),
                 )
                 conn.commit()
                 return self.send_json({"ok": True})

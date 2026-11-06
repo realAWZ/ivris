@@ -8,3 +8,5 @@ web/uploads/*
 .DS_Store
 .env
 .env.local
+__pycache__/
+*.pyc

@@ -19,9 +19,36 @@
       color: #ffffff;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
+    /* Modal scroll containment (per modern-web-guidance: dialog) */
+    dialog:modal {
+      overscroll-behavior: contain;
+    }
     dialog::backdrop {
-      background-color: rgba(0, 0, 0, 0.78);
+      background-color: rgba(0, 0, 0, 0.82);
       backdrop-filter: blur(6px);
+      overflow: hidden;
+      overscroll-behavior: contain;
+    }
+    /* Disable iOS long-press "Save Photo" callout, drag ghost, and zoom-morph on media */
+    img, video, .ivris-media, .carousel-image, .feed-post-card img, .story-frame img {
+      -webkit-touch-callout: none !important;
+      -webkit-user-select: none !important;
+      user-select: none !important;
+      -webkit-user-drag: none !important;
+    }
+    body {
+      -webkit-tap-highlight-color: transparent;
+    }
+    .ivris-media {
+      touch-action: pan-y pinch-zoom;
+      -webkit-touch-callout: none !important;
+      -webkit-user-select: none !important;
+      user-select: none !important;
+    }
+    /* Off-screen rendering & background task pause (per modern-web-guidance: efficient-background-processing) */
+    .feed-post-card {
+      content-visibility: auto;
+      contain-intrinsic-size: auto none auto 540px;
     }
     @media (prefers-reduced-motion: reduce) {
       ::view-transition-group(*),
@@ -37,6 +64,9 @@
     }
     .ig-ring-institution {
       background: linear-gradient(135deg, #38bdf8 0%, #fbbf24 55%, #2563eb 100%);
+    }
+    .ig-ring-seen {
+      background: #3f3f46;
     }
     /* Accessible Switch Control Styling (per modern-web-guidance: switch) */
     input[type="checkbox"][switch].ivris-switch {
@@ -115,6 +145,9 @@
     <!-- Dynamically rendered by JS -->
   </div>
 
+  <!-- Hidden file input for 1-tap profile photo change -->
+  <input id="quick-avatar-input" type="file" accept="image/*" class="hidden" onchange="handleQuickAvatarUpload(this)" />
+
   <!-- New Post (Up to 15 Photos) / Story Modal (Light-Dismiss enabled via closedby="any") -->
   <dialog id="compose-dialog" closedby="any" aria-labelledby="compose-dialog-title" onclose="stopPreviewAudio()" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
     <div class="space-y-4">
@@ -154,35 +187,26 @@
             <span class="text-zinc-400">Search songs ›</span>
           </button>
 
-          <div id="selected-music-pill" class="hidden p-3 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2.5">
-            <div class="flex items-center justify-between gap-2.5">
-              <div class="flex items-center gap-2.5 min-w-0">
-                <img id="selected-music-art" src="" alt="Album art" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" />
-                <div class="min-w-0">
-                  <p id="selected-music-title" class="text-xs font-semibold truncate text-white"></p>
-                  <p id="selected-music-artist" class="text-xs text-zinc-400 truncate"></p>
+          <!-- Instagram-Style Music Attached Pill -->
+          <div id="selected-music-pill" class="hidden p-3 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-3 min-w-0">
+              <img id="selected-music-art" src="" alt="Album art" class="w-10 h-10 rounded-lg object-cover bg-zinc-800 shrink-0 border border-zinc-800" />
+              <div class="min-w-0">
+                <p id="selected-music-title" class="text-xs font-bold text-white truncate"></p>
+                <div class="flex items-center gap-1.5 text-[11px] text-zinc-400 truncate">
+                  <span id="selected-music-artist" class="truncate"></span>
+                  <span>·</span>
+                  <span id="selected-music-start-badge" class="text-sky-400 font-semibold shrink-0">Starts at 0:00</span>
                 </div>
               </div>
-              <div class="flex items-center gap-1.5 shrink-0">
-                <button type="button" onclick="openMusicPickerModal()" class="px-2 py-1 rounded-lg bg-zinc-800 text-xs text-zinc-300 hover:text-white">Change</button>
-                <button type="button" onclick="clearSelectedMusic()" aria-label="Remove song" class="w-7 h-7 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white flex items-center justify-center text-xs">✕</button>
-              </div>
             </div>
-            <div class="pt-1 border-t border-zinc-900 space-y-1">
-              <label for="music-start-slider" class="flex items-center justify-between text-xs text-zinc-400">
-                <span>Choose where song starts</span>
-                <span id="music-start-label" class="font-semibold text-sky-400">0:00</span>
-              </label>
-              <input
-                id="music-start-slider"
-                type="range"
-                min="0"
-                max="24"
-                step="1"
-                value="0"
-                oninput="handleMusicStartChange(this.value)"
-                class="w-full accent-sky-500 cursor-pointer"
-              />
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button type="button" onclick="openMusicPickerModal(true)" class="px-2.5 py-1 rounded-lg bg-zinc-800 text-xs font-medium text-zinc-200 hover:text-white">
+                Trim
+              </button>
+              <button type="button" onclick="clearSelectedMusic()" aria-label="Remove music" class="w-7 h-7 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white flex items-center justify-center text-xs">
+                ✕
+              </button>
             </div>
           </div>
         </div>
@@ -198,39 +222,124 @@
     </div>
   </dialog>
 
-  <!-- Music Picker Modal (Search 100M+ Songs via Apple Music / iTunes Catalog) -->
-  <dialog id="music-picker-dialog" closedby="any" aria-labelledby="music-picker-title" onclose="stopPreviewAudio()" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
-    <div class="space-y-3.5">
-      <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
-        <h3 id="music-picker-title" class="text-sm font-semibold">Add Music</h3>
-        <button type="button" onclick="document.getElementById('music-picker-dialog').close()" class="text-xs text-zinc-400 hover:text-white">
+  <!-- Instagram-Style Music Picker & Trimmer Modal -->
+  <dialog id="music-picker-dialog" closedby="any" aria-labelledby="music-picker-title" onclose="handleMusicPickerClose()" class="w-full max-w-sm rounded-2xl bg-zinc-950 text-white border border-zinc-800 p-0 shadow-2xl overflow-hidden">
+    <!-- View 1: Search & Browse Songs -->
+    <div id="music-search-view" class="p-4 space-y-3">
+      <div class="flex items-center justify-between pb-2 border-b border-zinc-800/80">
+        <h3 id="music-picker-title" class="text-sm font-semibold">Music</h3>
+        <button type="button" onclick="document.getElementById('music-picker-dialog').close()" class="text-xs text-zinc-400 hover:text-white font-medium">
+          Cancel
+        </button>
+      </div>
+
+      <!-- Search Input -->
+      <div class="relative">
+        <svg class="w-4 h-4 text-zinc-400 absolute left-3 top-2.5 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input
+          id="music-search-input"
+          type="text"
+          placeholder="Search music..."
+          oninput="handleMusicSearchInput(this.value)"
+          class="w-full pl-9 pr-7 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-600"
+        />
+        <button type="button" id="music-search-clear-btn" onclick="clearMusicSearch()" class="hidden absolute right-2.5 top-2.5 text-zinc-400 hover:text-white text-xs">✕</button>
+      </div>
+
+      <!-- Quick Genre Chips -->
+      <div class="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+        <button type="button" onclick="searchMusicCategory('Trending', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-800 text-white hover:bg-zinc-700 whitespace-nowrap">Trending</button>
+        <button type="button" onclick="searchMusicCategory('Top Hits', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Top Hits</button>
+        <button type="button" onclick="searchMusicCategory('Hip-Hop', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Hip-Hop</button>
+        <button type="button" onclick="searchMusicCategory('Pop', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Pop</button>
+        <button type="button" onclick="searchMusicCategory('R&B', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">R&B</button>
+        <button type="button" onclick="searchMusicCategory('Indie', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Indie</button>
+      </div>
+
+      <!-- Songs List -->
+      <div id="music-results-list" class="max-h-[300px] overflow-y-auto divide-y divide-zinc-900 no-scrollbar">
+        <p class="py-8 text-center text-xs text-zinc-400">Loading songs...</p>
+      </div>
+    </div>
+
+    <!-- View 2: Instagram-Style Music Scrubber & Trimmer -->
+    <div id="music-trimmer-view" class="hidden p-4 space-y-4">
+      <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
+        <button type="button" onclick="switchMusicPickerView('search')" class="flex items-center gap-1 text-xs text-zinc-400 hover:text-white">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          Back
+        </button>
+        <span class="text-xs font-semibold text-zinc-200">Adjust Audio Snippet</span>
+        <button type="button" onclick="confirmSelectedMusicSnippet()" class="text-xs font-semibold text-sky-400 hover:text-sky-300">
           Done
         </button>
       </div>
 
-      <div class="relative">
-        <input
-          id="music-search-input"
-          type="text"
-          placeholder="Search any song or artist..."
-          oninput="handleMusicSearchInput(this.value)"
-          class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600"
-        />
+      <!-- Selected Track Banner -->
+      <div class="flex items-center gap-3 p-3 rounded-xl bg-zinc-900 border border-zinc-800/80">
+        <img id="trimmer-track-art" src="" alt="Album Art" class="w-12 h-12 rounded-lg object-cover bg-zinc-800 shrink-0 border border-zinc-800" />
+        <div class="min-w-0 flex-1">
+          <h4 id="trimmer-track-title" class="text-xs font-bold text-white truncate"></h4>
+          <p id="trimmer-track-artist" class="text-xs text-zinc-400 truncate"></p>
+        </div>
+        <button type="button" id="trimmer-play-btn" onclick="toggleTrimmerPreviewAudio()" aria-label="Toggle preview" class="w-9 h-9 rounded-full bg-white text-black flex items-center justify-center shrink-0 text-xs font-bold shadow hover:bg-zinc-200">
+          ▶
+        </button>
       </div>
 
-      <div id="music-results-list" class="max-h-72 overflow-y-auto divide-y divide-zinc-800/70 no-scrollbar">
-        <p class="py-8 text-center text-xs text-zinc-400">Loading songs...</p>
+      <!-- Instagram Waveform & Timeline Scrubber -->
+      <div class="space-y-3 pt-1">
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-zinc-400">Starts at</span>
+          <span id="trimmer-time-display" class="font-bold text-sky-400 text-sm">0:00</span>
+        </div>
+
+        <!-- Waveform Visualization (Instagram Sound Bars) -->
+        <div class="relative w-full h-14 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-between px-3 overflow-hidden select-none">
+          <div id="trimmer-waveform-bars" class="w-full h-full flex items-center justify-between gap-[2px] pointer-events-none py-2"></div>
+          <div id="trimmer-scrubber-window" class="absolute top-0 bottom-0 pointer-events-none border-2 border-sky-400 bg-sky-500/20 rounded-md transition-all duration-75" style="left: 0%; width: 25%;"></div>
+        </div>
+
+        <!-- Slider ranging from 0 to 29 seconds -->
+        <div class="space-y-1">
+          <input
+            id="trimmer-slider"
+            type="range"
+            min="0"
+            max="29"
+            step="1"
+            value="0"
+            oninput="handleTrimmerSliderInput(this.value)"
+            class="w-full accent-sky-500 cursor-pointer h-2 bg-zinc-800 rounded-lg appearance-none"
+          />
+          <div class="flex justify-between text-[10px] text-zinc-500 font-mono">
+            <span>0:00 (Start)</span>
+            <span>0:15</span>
+            <span>0:29 (End)</span>
+          </div>
+        </div>
       </div>
     </div>
   </dialog>
 
-  <!-- Edit Profile Modal (Light-Dismiss enabled via closedby="any") -->
+  <!-- Edit Profile Modal (with Profile Picture Picker) -->
   <dialog id="edit-profile-dialog" closedby="any" aria-labelledby="edit-profile-title" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
     <form onsubmit="handleSaveProfile(event)" class="space-y-4">
       <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
-        <h3 id="edit-profile-title" class="text-sm font-semibold">Edit Profile</h3>
+        <h3 id="edit-profile-title" class="text-sm font-semibold">Edit profile</h3>
         <button type="button" onclick="document.getElementById('edit-profile-dialog').close()" class="text-xs text-zinc-400 hover:text-white">
           Cancel
+        </button>
+      </div>
+
+      <!-- Profile Photo Selector -->
+      <div class="flex flex-col items-center gap-2 pt-1">
+        <button type="button" onclick="document.getElementById('edit-avatar-input').click()" class="relative w-20 h-20 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center text-lg font-bold border border-zinc-700">
+          <div id="edit-avatar-preview-box" class="w-full h-full flex items-center justify-center"></div>
+        </button>
+        <input id="edit-avatar-input" type="file" accept="image/*" class="hidden" onchange="handleEditAvatarFileChange(this)" />
+        <button type="button" onclick="document.getElementById('edit-avatar-input').click()" class="text-xs font-semibold text-sky-400 hover:text-sky-300">
+          Change profile photo
         </button>
       </div>
 
@@ -249,8 +358,8 @@
         </div>
       </div>
 
-      <button type="submit" class="w-full py-2.5 rounded-xl bg-sky-500 text-white text-xs font-semibold">
-        Save Changes
+      <button id="save-profile-btn" type="submit" class="w-full py-2.5 rounded-xl bg-sky-500 text-white text-xs font-semibold">
+        Done
       </button>
     </form>
   </dialog>
@@ -276,27 +385,131 @@
     </form>
   </dialog>
 
-  <!-- Story Viewer Modal (Light-Dismiss enabled via closedby="any") -->
-  <dialog id="story-viewer-dialog" closedby="any" aria-labelledby="story-viewer-author" class="w-full max-w-sm rounded-2xl bg-black text-white border border-zinc-800 p-4 shadow-2xl">
-    <div class="space-y-3">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <div id="story-viewer-initials" class="w-7 h-7 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-bold"></div>
-          <span id="story-viewer-author" class="text-xs font-semibold"></span>
-        </div>
-        <div class="flex items-center gap-3">
-          <button id="story-add-another-btn" onclick="document.getElementById('story-viewer-dialog').close();openComposeWithKind('video_story')" class="hidden text-xs text-sky-500 font-semibold">
-            + Add Story
+  <!-- Instagram-Identical Full-Screen Story Viewer Modal -->
+  <dialog id="story-viewer-dialog" closedby="any" aria-labelledby="story-viewer-author" onclose="closeStoryViewerCleanup()" class="w-full max-w-[430px] h-[100dvh] max-h-[100dvh] m-0 p-0 bg-black text-white border-0 overflow-hidden select-none">
+    <div class="w-full h-full flex flex-col justify-between bg-black relative">
+      <!-- Story 9:16 Media Frame -->
+      <div class="relative flex-1 w-full rounded-2xl overflow-hidden bg-zinc-950 flex items-center justify-center mt-1">
+        <!-- Segmented Top Progress Bars -->
+        <div id="story-progress-bars" class="absolute top-2.5 inset-x-2.5 z-30 flex gap-1"></div>
+
+        <!-- Top Author & Controls Overlay -->
+        <div class="absolute top-5 inset-x-3 z-30 flex items-center justify-between pt-1">
+          <button type="button" onclick="handleStoryAuthorTap()" class="flex items-center gap-2.5 text-left min-w-0">
+            <div id="story-viewer-avatar" class="w-8 h-8 rounded-full bg-zinc-800 border border-white/25 overflow-hidden flex items-center justify-center text-xs font-bold shrink-0"></div>
+            <div class="min-w-0 flex items-center gap-1.5">
+              <span id="story-viewer-author" class="text-[13px] font-semibold text-white drop-shadow truncate"></span>
+              <span id="story-viewer-time" class="text-xs text-white/75 drop-shadow shrink-0"></span>
+            </div>
           </button>
-          <form method="dialog">
-            <button type="submit" class="text-xs text-zinc-400 hover:text-white">Close</button>
-          </form>
+
+          <div class="flex items-center gap-1 shrink-0">
+            <button id="story-add-another-btn" type="button" onclick="document.getElementById('story-viewer-dialog').close();openComposeWithKind('video_story')" aria-label="Add to story" class="hidden w-9 h-9 rounded-full flex items-center justify-center text-white hover:bg-white/10">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button id="story-delete-btn" type="button" onclick="deleteActiveStory()" aria-label="Delete story" class="hidden w-9 h-9 rounded-full flex items-center justify-center text-white/85 hover:text-rose-400">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            </button>
+            <button id="story-report-btn" type="button" onclick="reportActiveStory()" aria-label="Report story" class="hidden w-9 h-9 rounded-full flex items-center justify-center text-white/85 hover:bg-white/10">
+              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+            <button type="button" onclick="document.getElementById('story-viewer-dialog').close()" aria-label="Close story" class="w-9 h-9 rounded-full flex items-center justify-center text-white hover:bg-white/10">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Top Subtle Gradient Scrim for readability -->
+        <div class="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/65 to-transparent z-20"></div>
+
+        <!-- Media Container -->
+        <div id="story-viewer-media-box" class="w-full h-full flex items-center justify-center bg-black"></div>
+
+        <!-- Invisible Left / Right Tap Navigation Zones (Instagram 35% back / 65% next) -->
+        <div class="absolute inset-x-0 top-16 bottom-16 z-20 flex" oncontextmenu="return false;">
+          <button type="button" onclick="stepStoryQueue(-1)"
+                  onpointerdown="pauseStoryTimer()" onpointerup="resumeStoryTimer()" onpointercancel="resumeStoryTimer()"
+                  oncontextmenu="return false;"
+                  aria-label="Previous story" class="w-[35%] h-full focus:outline-none"></button>
+          <button type="button" onclick="stepStoryQueue(1)"
+                  onpointerdown="pauseStoryTimer()" onpointerup="resumeStoryTimer()" onpointercancel="resumeStoryTimer()"
+                  oncontextmenu="return false;"
+                  aria-label="Next story" class="w-[65%] h-full focus:outline-none"></button>
+        </div>
+
+        <!-- Story Caption Overlay -->
+        <div id="story-viewer-caption-wrap" class="hidden pointer-events-none absolute inset-x-4 bottom-5 z-20 flex justify-center">
+          <p id="story-viewer-caption" class="px-4 py-2 rounded-xl bg-black/65 backdrop-blur-md text-xs text-white text-center leading-relaxed max-w-[90%]"></p>
+        </div>
+
+        <!-- Slide-Up Viewers Sheet for Own Story -->
+        <div id="story-viewers-sheet" class="hidden absolute inset-x-0 bottom-0 z-40 max-h-[65%] bg-zinc-900 border-t border-zinc-800 rounded-t-2xl p-4 flex flex-col">
+          <div class="flex items-center justify-between pb-3 border-b border-zinc-800">
+            <h4 id="story-viewers-sheet-title" class="text-xs font-semibold text-white">Story viewers</h4>
+            <button type="button" onclick="toggleStoryViewersSheet(false)" class="text-xs text-zinc-400 hover:text-white">Done</button>
+          </div>
+          <div id="story-viewers-list" class="py-2 overflow-y-auto divide-y divide-zinc-800/60 no-scrollbar"></div>
         </div>
       </div>
 
-      <div id="story-viewer-media-box" class="w-full aspect-[9/16] max-h-[480px] rounded-xl overflow-hidden bg-zinc-950 flex items-center justify-center"></div>
+      <!-- Instagram Story Bottom Bar -->
+      <div class="px-3 py-3 bg-black">
+        <!-- Friend Story Bottom Reply Bar (Message Only, No Like Button) -->
+        <form id="story-reply-bar" onsubmit="sendStoryReplyMessage(event)" class="flex items-center gap-2.5">
+          <input
+            id="story-reply-input"
+            type="text"
+            placeholder="Send message..."
+            onfocus="pauseStoryTimer()"
+            onblur="resumeStoryTimer()"
+            class="flex-1 h-11 px-4 rounded-full bg-transparent border border-zinc-700 text-xs text-white placeholder-zinc-400 focus:outline-none focus:border-zinc-400"
+          />
+          <button type="submit" aria-label="Send message" class="w-11 h-11 rounded-full flex items-center justify-center text-white hover:bg-zinc-900 shrink-0">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+            </svg>
+          </button>
+        </form>
 
-      <p id="story-viewer-caption" class="text-xs text-zinc-200"></p>
+        <!-- Own Story Bottom Activity Bar -->
+        <div id="story-own-bar" class="hidden flex items-center justify-between px-1">
+          <button type="button" onclick="toggleStoryViewersSheet(true)" class="flex items-center gap-2 py-1.5 px-3 rounded-full bg-zinc-900 border border-zinc-800 text-xs font-semibold text-white">
+            <svg class="w-4 h-4 text-zinc-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+            </svg>
+            <span id="story-own-views-label">Activity</span>
+          </button>
+          <button type="button" onclick="document.getElementById('story-viewer-dialog').close();openComposeWithKind('video_story')" class="flex items-center gap-1.5 py-1.5 px-3 rounded-full bg-zinc-900 border border-zinc-800 text-xs font-semibold text-white">
+            <span>+ Add to story</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Report Post / Story Modal -->
+  <dialog id="report-post-dialog" closedby="any" aria-labelledby="report-post-title" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
+    <div class="space-y-4">
+      <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+        <h3 id="report-post-title" class="text-sm font-semibold">Report Content</h3>
+        <button type="button" onclick="document.getElementById('report-post-dialog').close()" class="text-xs text-zinc-400 hover:text-white">Cancel</button>
+      </div>
+      <p class="text-xs text-zinc-400">Why are you reporting this post? Nudity and explicit content are immediately deleted.</p>
+      <div class="space-y-2">
+        <button type="button" onclick="submitPostReport('Nudity or explicit sexual content')" class="w-full p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-left text-xs font-semibold text-rose-300 hover:bg-rose-500/25">
+          Nudity or explicit content (Immediate deletion)
+        </button>
+        <button type="button" onclick="submitPostReport('Harassment or bullying')" class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-left text-xs font-medium text-white hover:bg-zinc-800">
+          Harassment or bullying
+        </button>
+        <button type="button" onclick="submitPostReport('Hate speech or symbols')" class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-left text-xs font-medium text-white hover:bg-zinc-800">
+          Hate speech or symbols
+        </button>
+        <button type="button" onclick="submitPostReport('Spam or misleading')" class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-left text-xs font-medium text-white hover:bg-zinc-800">
+          Spam or misleading
+        </button>
+      </div>
     </div>
   </dialog>
 
@@ -309,7 +522,7 @@
       </p>
       <div class="grid grid-cols-2 gap-2 pt-1">
         <form method="dialog">
-          <button type="submit" class="w-full py-2.5 rounded-xl bg-zinc-800 text-xs font-semibold text-white">
+          <button type="submit" autofocus class="w-full py-2.5 rounded-xl bg-zinc-800 text-xs font-semibold text-white">
             Cancel
           </button>
         </form>
@@ -427,6 +640,7 @@
       myStories: [],
       stories: [],
       seenPostIds: [],
+      viewedPostIds: [],
       allProfiles: [],
       connections: [],
       messages: [],
@@ -439,14 +653,47 @@
       selectedMusic: null,
       musicResults: [],
       playingPostId: null,
-      previewingTrackId: null
+      previewingTrackId: null,
+      pendingAvatarDataUrl: '',
+      storyQueue: [],
+      storyQueueIdx: 0,
+      storyIsOwn: false,
+      reportingPostId: '',
+      moderationDashboard: null,
+      modTab: 'reports',
+      modBanner: ''
     };
 
     let activeAudioEl = null;
     let activeAutoPostId = null;
     let activeAutoStartSec = 0;
     let feedMusicObserver = null;
+    let feedViewObserver = null;
+    let visibleMusicRatios = new Map();
     let musicSearchTimer = null;
+    let storyProgressTimer = null;
+    let storyElapsedMs = 0;
+    let storyDurationMs = 5000;
+    let storyPaused = false;
+    const recordedViewIdsThisSession = new Set();
+
+    function renderAvatarInner(entity, textSizeClass = 'text-xs') {
+      const url = entity?.avatar_url || '';
+      const initials = ((entity?.handle || entity?.display_name || 'U').replace('@', '').slice(0, 2) || 'U').toUpperCase();
+      if (url) {
+        return `<img src="${escapeAttr(url)}" alt="" class="w-full h-full rounded-full object-cover" />`;
+      }
+      return `<span class="${textSizeClass} font-bold text-white select-none">${escapeAttr(initials)}</span>`;
+    }
+
+    function formatRelativeShort(ts) {
+      if (!ts) return '';
+      const diff = Math.max(1, Math.floor(Date.now() / 1000) - Number(ts));
+      if (diff < 60) return `${diff}s`;
+      if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+      return `${Math.floor(diff / 86400)}d`;
+    }
 
     async function apiFetch(path, options = {}) {
       const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
@@ -475,11 +722,17 @@
         persistAuthSession(data.token || appState.token, data.user);
         appState.connections = data.connections || [];
         appState.seenPostIds = data.seenPostIds || [];
+        appState.viewedPostIds = data.viewedPostIds || [];
         appState.feedPosts = data.feedPosts || [];
         appState.myPosts = data.myPosts || [];
         appState.myStories = data.myStories || [];
         appState.stories = data.stories || [];
         appState.allProfiles = data.allProfiles || [];
+        appState.moderationDashboard = data.moderationDashboard || null;
+        if (appState.selectedMyPost) {
+          const updatedMy = appState.myPosts.find(p => p.id === appState.selectedMyPost.id);
+          if (updatedMy) appState.selectedMyPost = updatedMy;
+        }
         render();
       } catch (_err) {
         render();
@@ -487,6 +740,7 @@
     }
 
     function navigate(screen, subTab) {
+      stopPreviewAudio();
       const apply = () => {
         appState.screen = screen;
         if (subTab) appState.searchTab = subTab;
@@ -580,16 +834,85 @@
     }
 
     async function signOut() {
+      stopPreviewAudio();
       try {
         await fetch('/api/signout', { method: 'POST', credentials: 'same-origin' });
       } catch (_e) {}
       clearAuthSession();
+      appState.moderationDashboard = null;
       appState.screen = 'main';
       render();
     }
 
+    function cropAndCompressAvatar(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = reject;
+        reader.onload = () => {
+          const img = new Image();
+          img.onerror = reject;
+          img.onload = () => {
+            const size = 360;
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            const minSide = Math.min(img.width, img.height);
+            const sx = (img.width - minSide) / 2;
+            const sy = (img.height - minSide) / 2;
+            ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
+            resolve(canvas.toDataURL('image/jpeg', 0.86));
+          };
+          img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function handleQuickAvatarUpload(inputEl) {
+      const file = inputEl?.files?.[0];
+      if (!file || !appState.user) return;
+      try {
+        const dataUrl = await cropAndCompressAvatar(file);
+        await apiFetch('/api/update-profile', {
+          method: 'POST',
+          body: JSON.stringify({
+            display_name: appState.user.display_name,
+            handle: appState.user.handle,
+            bio: appState.user.bio || '',
+            avatar_data_url: dataUrl
+          })
+        });
+        inputEl.value = '';
+        await loadLiveData();
+      } catch (err) {
+        alert(err.message || 'Could not update profile picture');
+      }
+    }
+
+    async function handleEditAvatarFileChange(inputEl) {
+      const file = inputEl?.files?.[0];
+      if (!file) return;
+      try {
+        const dataUrl = await cropAndCompressAvatar(file);
+        appState.pendingAvatarDataUrl = dataUrl;
+        const box = document.getElementById('edit-avatar-preview-box');
+        if (box) {
+          box.innerHTML = `<img src="${escapeAttr(dataUrl)}" alt="New profile preview" class="w-full h-full rounded-full object-cover" />`;
+        }
+      } catch (_e) {}
+    }
+
     function openEditProfileModal() {
       if (!appState.user) return;
+      stopPreviewAudio();
+      appState.pendingAvatarDataUrl = '';
+      const inputEl = document.getElementById('edit-avatar-input');
+      if (inputEl) inputEl.value = '';
+      const box = document.getElementById('edit-avatar-preview-box');
+      if (box) {
+        box.innerHTML = renderAvatarInner(appState.user, 'text-lg');
+      }
       document.getElementById('edit-display-name').value = appState.user.display_name || '';
       document.getElementById('edit-handle').value = appState.user.handle || '';
       document.getElementById('edit-bio').value = appState.user.bio || '';
@@ -599,14 +922,19 @@
     async function handleSaveProfile(e) {
       e.preventDefault();
       try {
+        const payload = {
+          display_name: document.getElementById('edit-display-name').value,
+          handle: document.getElementById('edit-handle').value,
+          bio: document.getElementById('edit-bio').value
+        };
+        if (appState.pendingAvatarDataUrl) {
+          payload.avatar_data_url = appState.pendingAvatarDataUrl;
+        }
         await apiFetch('/api/update-profile', {
           method: 'POST',
-          body: JSON.stringify({
-            display_name: document.getElementById('edit-display-name').value,
-            handle: document.getElementById('edit-handle').value,
-            bio: document.getElementById('edit-bio').value
-          })
+          body: JSON.stringify(payload)
         });
+        appState.pendingAvatarDataUrl = '';
         document.getElementById('edit-profile-dialog').close();
         await loadLiveData();
       } catch (err) {
@@ -701,6 +1029,7 @@
     }
 
     function openComposeWithKind(kind) {
+      stopPreviewAudio();
       setComposeKind(kind);
       document.getElementById('compose-dialog').showModal();
     }
@@ -732,6 +1061,9 @@
       }
     }
 
+    let trimmerCurrentTrack = null;
+    let trimmerStartSec = 0;
+
     function formatMusicSeconds(sec) {
       const s = Math.max(0, Math.min(29, Math.floor(Number(sec) || 0)));
       return `0:${s < 10 ? '0' + s : s}`;
@@ -744,67 +1076,112 @@
       if (appState.selectedMusic) {
         triggerBtn.classList.add('hidden');
         pill.classList.remove('hidden');
-        document.getElementById('selected-music-art').src = appState.selectedMusic.artwork_url || '';
-        document.getElementById('selected-music-title').textContent = appState.selectedMusic.title || '';
-        document.getElementById('selected-music-artist').textContent = appState.selectedMusic.artist || '';
-        const startSec = Number(appState.selectedMusic.start_time || 0);
-        const slider = document.getElementById('music-start-slider');
-        const label = document.getElementById('music-start-label');
-        if (slider) slider.value = String(startSec);
-        if (label) label.textContent = formatMusicSeconds(startSec);
+        const artEl = document.getElementById('selected-music-art');
+        if (artEl) artEl.src = appState.selectedMusic.artwork_url || '';
+        const titleEl = document.getElementById('selected-music-title');
+        if (titleEl) titleEl.textContent = appState.selectedMusic.title || '';
+        const artistEl = document.getElementById('selected-music-artist');
+        if (artistEl) artistEl.textContent = appState.selectedMusic.artist || '';
+        const badgeEl = document.getElementById('selected-music-start-badge');
+        const startSec = Math.max(0, Math.min(29, Number(appState.selectedMusic.start_time || 0)));
+        if (badgeEl) badgeEl.textContent = `Starts at ${formatMusicSeconds(startSec)}`;
       } else {
         triggerBtn.classList.remove('hidden');
         pill.classList.add('hidden');
       }
     }
 
-    function handleMusicStartChange(val) {
-      const startSec = Math.max(0, Math.min(24, Number(val) || 0));
-      const label = document.getElementById('music-start-label');
-      if (label) label.textContent = formatMusicSeconds(startSec);
-      if (!appState.selectedMusic) return;
-      appState.selectedMusic.start_time = startSec;
-      if (appState.selectedMusic.preview_url) {
-        if (!activeAudioEl || activeAudioEl.src !== appState.selectedMusic.preview_url) {
-          stopPreviewAudio();
-          activeAudioEl = new Audio(appState.selectedMusic.preview_url);
-        }
-        activeAudioEl.currentTime = startSec;
-        activeAudioEl.play().catch(() => {});
-      }
-    }
-
     function clearSelectedMusic() {
       appState.selectedMusic = null;
+      trimmerCurrentTrack = null;
+      trimmerStartSec = 0;
       stopPreviewAudio();
       syncSelectedMusicUI();
     }
 
     function stopPreviewAudio() {
       if (activeAudioEl) {
-        activeAudioEl.pause();
+        try {
+          activeAudioEl.pause();
+          activeAudioEl.currentTime = 0;
+          activeAudioEl.src = '';
+          activeAudioEl.load();
+        } catch (_e) {}
         activeAudioEl = null;
       }
       activeAutoPostId = null;
       appState.previewingTrackId = null;
       appState.playingPostId = null;
+      const trimmerBtn = document.getElementById('trimmer-play-btn');
+      if (trimmerBtn) trimmerBtn.textContent = '▶';
     }
 
-    function openMusicPickerModal() {
+    function handleMusicPickerClose() {
+      stopPreviewAudio();
+    }
+
+    function switchMusicPickerView(view) {
+      const searchView = document.getElementById('music-search-view');
+      const trimmerView = document.getElementById('music-trimmer-view');
+      if (view === 'trimmer') {
+        searchView.classList.add('hidden');
+        trimmerView.classList.remove('hidden');
+      } else {
+        trimmerView.classList.add('hidden');
+        searchView.classList.remove('hidden');
+        stopPreviewAudio();
+        renderMusicResults();
+      }
+    }
+
+    function openMusicPickerModal(openDirectTrimmer = false) {
+      stopPreviewAudio();
       const dialog = document.getElementById('music-picker-dialog');
       dialog.showModal();
+
+      if (openDirectTrimmer && appState.selectedMusic) {
+        openMusicTrimmerView(appState.selectedMusic, appState.selectedMusic.start_time || 0);
+        return;
+      }
+
+      switchMusicPickerView('search');
       const input = document.getElementById('music-search-input');
       if (appState.musicResults.length === 0) {
-        fetchMusicCatalog(input.value.trim() || 'Drake');
+        fetchMusicCatalog(input?.value?.trim() || 'Trending');
       } else {
         renderMusicResults();
       }
     }
 
+    function clearMusicSearch() {
+      const input = document.getElementById('music-search-input');
+      if (input) {
+        input.value = '';
+        document.getElementById('music-search-clear-btn')?.classList.add('hidden');
+        fetchMusicCatalog('Trending');
+      }
+    }
+
+    function searchMusicCategory(cat, btn) {
+      const input = document.getElementById('music-search-input');
+      if (input) input.value = cat;
+      document.querySelectorAll('.music-genre-chip').forEach(el => {
+        el.classList.remove('bg-zinc-800', 'text-white');
+        el.classList.add('bg-zinc-900', 'text-zinc-400');
+      });
+      if (btn) {
+        btn.classList.remove('bg-zinc-900', 'text-zinc-400');
+        btn.classList.add('bg-zinc-800', 'text-white');
+      }
+      fetchMusicCatalog(cat);
+    }
+
     function handleMusicSearchInput(val) {
+      const clearBtn = document.getElementById('music-search-clear-btn');
+      if (clearBtn) clearBtn.classList.toggle('hidden', !val.trim());
       if (musicSearchTimer) clearTimeout(musicSearchTimer);
       musicSearchTimer = setTimeout(() => {
-        fetchMusicCatalog(val.trim() || 'top hits');
+        fetchMusicCatalog(val.trim() || 'Trending');
       }, 260);
     }
 
@@ -839,35 +1216,35 @@
       const listEl = document.getElementById('music-results-list');
       if (!listEl) return;
       if (appState.musicResults.length === 0) {
-        listEl.innerHTML = `<p class="py-8 text-center text-xs text-zinc-500">No songs found. Try another song or artist.</p>`;
+        listEl.innerHTML = `<p class="py-8 text-center text-xs text-zinc-500">No songs found. Try searching another song or artist.</p>`;
         return;
       }
       listEl.innerHTML = appState.musicResults.map((track, idx) => {
         const isPreviewing = appState.previewingTrackId === track.id;
         return `
-          <div class="py-2.5 flex items-center justify-between gap-2.5">
-            <button type="button" onclick="selectMusicTrack(${idx})" class="flex-1 flex items-center gap-3 min-w-0 text-left hover:opacity-85">
-              <img src="${escapeAttr(track.artwork_url)}" alt="" class="w-10 h-10 rounded-lg object-cover bg-zinc-800 shrink-0" />
+          <div class="py-2.5 flex items-center justify-between gap-2.5 hover:bg-zinc-900/60 rounded-xl px-2 transition-colors">
+            <button type="button" onclick="selectTrackForTrimming(${idx})" class="flex-1 flex items-center gap-3 min-w-0 text-left">
+              <img src="${escapeAttr(track.artwork_url)}" alt="" class="w-11 h-11 rounded-lg object-cover bg-zinc-800 shrink-0 border border-zinc-800" />
               <div class="min-w-0">
                 <p class="text-xs font-semibold text-white truncate">${escapeAttr(track.title)}</p>
-                <p class="text-xs text-zinc-400 truncate">${escapeAttr(track.artist)}</p>
+                <p class="text-[11px] text-zinc-400 truncate">${escapeAttr(track.artist)}</p>
               </div>
             </button>
-            <div class="flex items-center gap-1.5 shrink-0">
+            <div class="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onclick="togglePreviewTrack(${idx}, event)"
                 aria-label="${isPreviewing ? 'Pause preview' : 'Play preview'}"
-                class="w-8 h-8 rounded-full ${isPreviewing ? 'bg-sky-500 text-white' : 'bg-zinc-800 text-zinc-300'} flex items-center justify-center text-xs"
+                class="w-8 h-8 rounded-full ${isPreviewing ? 'bg-sky-500 text-white' : 'bg-zinc-800 text-zinc-300 hover:text-white'} flex items-center justify-center text-xs font-bold transition-all"
               >
                 ${isPreviewing ? '❚❚' : '▶'}
               </button>
               <button
                 type="button"
-                onclick="selectMusicTrack(${idx})"
-                class="px-3 py-1.5 rounded-lg bg-sky-500 text-white text-xs font-semibold"
+                onclick="selectTrackForTrimming(${idx})"
+                class="px-3 py-1.5 rounded-lg bg-sky-500/15 border border-sky-500/30 text-sky-400 hover:bg-sky-500 hover:text-white text-xs font-semibold transition-colors"
               >
-                Add
+                Select
               </button>
             </div>
           </div>
@@ -879,7 +1256,7 @@
       if (event) event.stopPropagation();
       const track = appState.musicResults[idx];
       if (!track || !track.preview_url) return;
-      if (appState.previewingTrackId === track.id && activeAudioEl) {
+      if (appState.previewingTrackId === track.id && activeAudioEl && !activeAudioEl.paused) {
         stopPreviewAudio();
         renderMusicResults();
         return;
@@ -895,29 +1272,136 @@
       renderMusicResults();
     }
 
-    function selectMusicTrack(idx) {
+    function selectTrackForTrimming(idx) {
       const track = appState.musicResults[idx];
       if (!track) return;
+      openMusicTrimmerView(track, 0);
+    }
+
+    function openMusicTrimmerView(track, initialStartSec = 0) {
+      trimmerCurrentTrack = track;
+      trimmerStartSec = Math.max(0, Math.min(29, Number(initialStartSec) || 0));
+      stopPreviewAudio();
+      switchMusicPickerView('trimmer');
+
+      document.getElementById('trimmer-track-art').src = track.artwork_url || '';
+      document.getElementById('trimmer-track-title').textContent = track.title || '';
+      document.getElementById('trimmer-track-artist').textContent = track.artist || '';
+
+      // Generate Instagram-like waveform sound bars
+      const barHeights = [28, 42, 65, 80, 52, 70, 95, 100, 72, 88, 45, 60, 80, 98, 62, 45, 75, 90, 100, 82, 55, 68, 92, 85, 65, 48, 72, 88, 95, 68, 52, 42, 65, 82, 68, 48];
+      const barsContainer = document.getElementById('trimmer-waveform-bars');
+      if (barsContainer) {
+        barsContainer.innerHTML = barHeights.map(h => `
+          <div class="flex-1 bg-white/40 rounded-full transition-all" style="height: ${h}%;"></div>
+        `).join('');
+      }
+
+      const slider = document.getElementById('trimmer-slider');
+      if (slider) slider.value = String(trimmerStartSec);
+      updateTrimmerUI(trimmerStartSec);
+
+      // Immediately play snippet from the chosen second
+      playTrimmerAudioSnippet(trimmerStartSec);
+    }
+
+    function updateTrimmerUI(sec) {
+      const timeDisplay = document.getElementById('trimmer-time-display');
+      if (timeDisplay) timeDisplay.textContent = formatMusicSeconds(sec);
+      const windowEl = document.getElementById('trimmer-scrubber-window');
+      if (windowEl) {
+        const pct = Math.min(75, (sec / 30) * 75);
+        windowEl.style.left = `${pct}%`;
+      }
+    }
+
+    function handleTrimmerSliderInput(val) {
+      const sec = Math.max(0, Math.min(29, Number(val) || 0));
+      trimmerStartSec = sec;
+      updateTrimmerUI(sec);
+      playTrimmerAudioSnippet(sec);
+    }
+
+    function playTrimmerAudioSnippet(startSec) {
+      if (!trimmerCurrentTrack || !trimmerCurrentTrack.preview_url) return;
+      if (!activeAudioEl || activeAudioEl.src !== trimmerCurrentTrack.preview_url) {
+        stopPreviewAudio();
+        activeAudioEl = new Audio(trimmerCurrentTrack.preview_url);
+      }
+      const audio = activeAudioEl;
+      const trimmerBtn = document.getElementById('trimmer-play-btn');
+      if (trimmerBtn) trimmerBtn.textContent = '❚❚';
+
+      const seekAndPlay = () => {
+        if (!activeAudioEl || activeAudioEl !== audio) return;
+        try {
+          audio.currentTime = startSec;
+        } catch (_e) {}
+        audio.play().catch(() => {});
+      };
+
+      if (audio.readyState >= 1) {
+        seekAndPlay();
+      } else {
+        audio.addEventListener('loadedmetadata', seekAndPlay, { once: true });
+        audio.addEventListener('canplay', () => {
+          if (Math.abs(audio.currentTime - startSec) > 0.4) {
+            try { audio.currentTime = startSec; } catch (_e) {}
+          }
+        }, { once: true });
+      }
+
+      audio.onended = () => {
+        if (activeAudioEl === audio) {
+          playTrimmerAudioSnippet(trimmerStartSec);
+        }
+      };
+    }
+
+    function toggleTrimmerPreviewAudio() {
+      const trimmerBtn = document.getElementById('trimmer-play-btn');
+      if (!activeAudioEl) {
+        playTrimmerAudioSnippet(trimmerStartSec);
+        return;
+      }
+      if (activeAudioEl.paused) {
+        activeAudioEl.currentTime = trimmerStartSec;
+        activeAudioEl.play().catch(() => {});
+        if (trimmerBtn) trimmerBtn.textContent = '❚❚';
+      } else {
+        activeAudioEl.pause();
+        if (trimmerBtn) trimmerBtn.textContent = '▶';
+      }
+    }
+
+    function confirmSelectedMusicSnippet() {
+      if (!trimmerCurrentTrack) return;
       appState.selectedMusic = {
-        id: track.id,
-        title: track.title,
-        artist: track.artist,
-        artwork_url: track.artwork_url,
-        preview_url: track.preview_url,
-        start_time: 0
+        id: trimmerCurrentTrack.id,
+        title: trimmerCurrentTrack.title,
+        artist: trimmerCurrentTrack.artist,
+        artwork_url: trimmerCurrentTrack.artwork_url,
+        preview_url: trimmerCurrentTrack.preview_url,
+        start_time: trimmerStartSec
       };
       stopPreviewAudio();
       syncSelectedMusicUI();
       document.getElementById('music-picker-dialog').close();
-      handleMusicStartChange(0);
     }
 
     function startAutoPostAudio(post) {
+      if (document.hidden || document.visibilityState !== 'visible') {
+        stopPreviewAudio();
+        return;
+      }
+      if (document.querySelector('dialog[open]')) {
+        return;
+      }
       if (!post || !post.music || !post.music.preview_url) {
         stopPreviewAudio();
         return;
       }
-      const startSec = Math.max(0, Math.min(24, Number(post.music.start_time || 0)));
+      const startSec = Math.max(0, Math.min(29, Number(post.music.start_time || 0)));
       if (activeAutoPostId === post.id && activeAudioEl && !activeAudioEl.paused) {
         return;
       }
@@ -928,6 +1412,10 @@
       const audio = new Audio(post.music.preview_url);
       activeAudioEl = audio;
       const seekAndPlay = () => {
+        if (document.hidden || activeAudioEl !== audio) {
+          try { audio.pause(); } catch (_e) {}
+          return;
+        }
         try {
           audio.currentTime = startSec;
         } catch (_e) {}
@@ -937,9 +1425,14 @@
         seekAndPlay();
       } else {
         audio.addEventListener('loadedmetadata', seekAndPlay, { once: true });
+        audio.addEventListener('canplay', () => {
+          if (Math.abs(audio.currentTime - startSec) > 0.5) {
+            try { audio.currentTime = startSec; } catch (_e) {}
+          }
+        }, { once: true });
       }
       audio.onended = () => {
-        if (activeAutoPostId === post.id && activeAudioEl === audio) {
+        if (!document.hidden && activeAutoPostId === post.id && activeAudioEl === audio) {
           try {
             audio.currentTime = activeAutoStartSec;
             audio.play().catch(() => {});
@@ -948,10 +1441,37 @@
       };
     }
 
+    function checkActiveMusicViewportVisibility() {
+      if (document.hidden || document.visibilityState !== 'visible') {
+        stopPreviewAudio();
+        return;
+      }
+      if (appState.screen !== 'main') return;
+      if (!activeAutoPostId) return;
+      const el = document.querySelector(`article[data-music-post-id="${activeAutoPostId}"]`);
+      if (!el) {
+        stopPreviewAudio();
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const vh = window.innerHeight || document.documentElement.clientHeight;
+      const visibleHeight = Math.max(0, Math.min(rect.bottom, vh) - Math.max(rect.top, 0));
+      const ratio = rect.height > 0 ? visibleHeight / rect.height : 0;
+      if (ratio < 0.5) {
+        stopPreviewAudio();
+      }
+    }
+
     function syncAutoPostMusic() {
       if (feedMusicObserver) {
         feedMusicObserver.disconnect();
         feedMusicObserver = null;
+      }
+      visibleMusicRatios.clear();
+
+      if (document.hidden || document.visibilityState !== 'visible') {
+        stopPreviewAudio();
+        return;
       }
       if (appState.screen === 'myPost' && appState.selectedMyPost) {
         startAutoPostAudio(appState.selectedMyPost);
@@ -968,24 +1488,64 @@
           return;
         }
         feedMusicObserver = new IntersectionObserver((entries) => {
-          let bestEntry = null;
           for (const entry of entries) {
-            if (entry.isIntersecting && entry.intersectionRatio >= 0.55) {
-              if (!bestEntry || entry.intersectionRatio > bestEntry.intersectionRatio) {
-                bestEntry = entry;
-              }
+            const pid = entry.target.getAttribute('data-music-post-id');
+            if (!pid) continue;
+            visibleMusicRatios.set(pid, entry.isIntersecting ? entry.intersectionRatio : 0);
+          }
+          let bestPid = null;
+          let bestRatio = 0;
+          for (const [pid, ratio] of visibleMusicRatios.entries()) {
+            if (ratio >= 0.55 && ratio > bestRatio) {
+              bestRatio = ratio;
+              bestPid = pid;
             }
           }
-          if (bestEntry) {
-            const pid = bestEntry.target.getAttribute('data-music-post-id');
-            const post = appState.feedPosts.find(p => p.id === pid);
+          if (bestPid) {
+            const post = appState.feedPosts.find(p => p.id === bestPid);
             if (post) startAutoPostAudio(post);
+          } else {
+            stopPreviewAudio();
           }
-        }, { threshold: [0.55, 0.75] });
+        }, { threshold: [0, 0.25, 0.5, 0.55, 0.75, 0.95] });
         articles.forEach(a => feedMusicObserver.observe(a));
         return;
       }
       stopPreviewAudio();
+    }
+
+    async function recordPostView(postId) {
+      if (!postId || !appState.user) return;
+      if (recordedViewIdsThisSession.has(postId)) return;
+      recordedViewIdsThisSession.add(postId);
+      if (!appState.viewedPostIds.includes(postId)) {
+        appState.viewedPostIds.push(postId);
+      }
+      try {
+        await apiFetch('/api/view', {
+          method: 'POST',
+          body: JSON.stringify({ post_id: postId })
+        });
+      } catch (_e) {}
+    }
+
+    function setupFeedViewReceiptObserver() {
+      if (feedViewObserver) {
+        feedViewObserver.disconnect();
+        feedViewObserver = null;
+      }
+      if (appState.screen !== 'main') return;
+      const postArticles = document.querySelectorAll('article[data-post-id]');
+      if (!postArticles.length) return;
+      feedViewObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.55) {
+            const pid = entry.target.getAttribute('data-post-id');
+            if (pid) recordPostView(pid);
+          }
+        }
+      }, { threshold: [0.55] });
+      postArticles.forEach(a => feedViewObserver.observe(a));
     }
 
     async function handleFileSelectionPreview() {
@@ -1019,6 +1579,70 @@
       strip.classList.remove('hidden');
     }
 
+    function analyzeDataUrlForNudityClient(dataUrl) {
+      return new Promise((resolve) => {
+        if (!dataUrl || !dataUrl.startsWith('data:image/')) {
+          resolve({ flagged: false, reason: '' });
+          return;
+        }
+        const img = new Image();
+        img.onerror = () => resolve({ flagged: false, reason: '' });
+        img.onload = () => {
+          try {
+            const w = 120;
+            const h = 120;
+            const c = document.createElement('canvas');
+            c.width = w;
+            c.height = h;
+            const ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            const data = ctx.getImageData(0, 0, w, h).data;
+            let skin = 0;
+            let centerSkin = 0;
+            let centerTotal = 0;
+            let torsoSkin = 0;
+            let torsoTotal = 0;
+            const total = w * h;
+            for (let i = 0; i < total; i++) {
+              const r = data[i * 4];
+              const g = data[i * 4 + 1];
+              const b = data[i * 4 + 2];
+              const row = Math.floor(i / w);
+              const col = i % w;
+              const inCenter = row >= 18 && row <= 102 && col >= 18 && col <= 102;
+              const inTorso = row >= 36 && row <= 108 && col >= 24 && col <= 96;
+              if (inCenter) centerTotal++;
+              if (inTorso) torsoTotal++;
+
+              const y = 0.299 * r + 0.587 * g + 0.114 * b;
+              const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+              const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+
+              const rgbSkin = r > 85 && g > 35 && b > 18 && (Math.max(r, g, b) - Math.min(r, g, b)) > 12 && Math.abs(r - g) > 10 && r >= g && r >= b;
+              const ycbcrSkin = cb >= 77 && cb <= 132 && cr >= 131 && cr <= 178 && y > 50;
+              if (rgbSkin && ycbcrSkin) {
+                skin++;
+                if (inCenter) centerSkin++;
+                if (inTorso) torsoSkin++;
+              }
+            }
+            const overallRatio = skin / total;
+            const centerRatio = centerSkin / Math.max(1, centerTotal);
+            const torsoRatio = torsoSkin / Math.max(1, torsoTotal);
+            if ((centerRatio >= 0.48 && torsoRatio >= 0.50 && overallRatio >= 0.36) || (centerRatio >= 0.58 && overallRatio >= 0.44)) {
+              resolve({
+                flagged: true,
+                reason: `Client+Server nudity filter triggered (torso ${Math.round(torsoRatio * 100)}%, center ${Math.round(centerRatio * 100)}%).`
+              });
+              return;
+            }
+          } catch (_e) {}
+          resolve({ flagged: false, reason: '' });
+        };
+        img.src = dataUrl;
+      });
+    }
+
     async function handleCreatePost() {
       const fileInput = document.getElementById('media-file-input');
       const caption = document.getElementById('compose-caption').value.trim();
@@ -1042,6 +1666,26 @@
         const slice = appState.composeKind === 'photo_post' ? files.slice(0, 15) : files.slice(0, 1);
         const dataUrls = await Promise.all(slice.map(f => fileToDataUrl(f)));
 
+        let clientNudityFlagged = false;
+        let clientNudityReason = '';
+        for (const f of slice) {
+          if (/\b(nude|nudes|nudity|naked|nsfw|porn|xxx|onlyfans|topless)\b/i.test(f.name || '')) {
+            clientNudityFlagged = true;
+            clientNudityReason = `Explicit filename detected (${f.name}).`;
+            break;
+          }
+        }
+        if (!clientNudityFlagged) {
+          for (const dUrl of dataUrls) {
+            const check = await analyzeDataUrlForNudityClient(dUrl);
+            if (check.flagged) {
+              clientNudityFlagged = true;
+              clientNudityReason = check.reason;
+              break;
+            }
+          }
+        }
+
         await apiFetch('/api/posts', {
           method: 'POST',
           body: JSON.stringify({
@@ -1049,7 +1693,9 @@
             caption,
             location_label: location,
             music: appState.composeKind === 'photo_post' ? appState.selectedMusic : null,
-            data_urls: dataUrls
+            data_urls: dataUrls,
+            client_nudity_flagged: clientNudityFlagged,
+            client_nudity_reason: clientNudityReason
           })
         });
 
@@ -1070,27 +1716,336 @@
 
     function handleYourStoryClick() {
       if (appState.myStories.length > 0) {
-        openStoryViewer(appState.myStories[0], true);
+        openStoryQueue([...appState.myStories].reverse(), 0, true);
       } else {
         openComposeWithKind('video_story');
       }
     }
 
-    function openStoryViewer(story, isOwn = false) {
-      document.getElementById('story-viewer-initials').textContent = (story.handle || 'U').slice(0, 2).toUpperCase();
-      document.getElementById('story-viewer-author').textContent = isOwn ? 'Your story' : story.handle;
-      document.getElementById('story-viewer-caption').textContent = story.caption || '';
-      const addBtn = document.getElementById('story-add-another-btn');
-      if (isOwn) addBtn.classList.remove('hidden');
-      else addBtn.classList.add('hidden');
+    function openAuthorStories(authorId) {
+      const authorStories = appState.stories
+        .filter(s => s.author_id === authorId)
+        .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+      if (!authorStories.length) return;
+      openStoryQueue(authorStories, 0, false);
+    }
 
-      const box = document.getElementById('story-viewer-media-box');
-      if (story.media_url.endsWith('.mp4')) {
-        box.innerHTML = `<video src="${story.media_url}" width="360" height="640" controls autoplay playsinline class="w-full h-full object-cover"></video>`;
-      } else {
-        box.innerHTML = `<img src="${story.media_url}" alt="Story" class="w-full h-full object-cover" />`;
+    function openStoryQueue(queue, startIndex = 0, isOwn = false) {
+      if (!queue || !queue.length) return;
+      stopPreviewAudio();
+      appState.storyQueue = queue;
+      appState.storyQueueIdx = Math.max(0, Math.min(startIndex, queue.length - 1));
+      appState.storyIsOwn = isOwn;
+      toggleStoryViewersSheet(false);
+      const dlg = document.getElementById('story-viewer-dialog');
+      if (!dlg.open) dlg.showModal();
+      renderActiveStorySlide();
+    }
+
+    function clearStoryTimer() {
+      if (storyProgressTimer) {
+        clearInterval(storyProgressTimer);
+        storyProgressTimer = null;
       }
-      document.getElementById('story-viewer-dialog').showModal();
+    }
+
+    function pauseStoryTimer() {
+      storyPaused = true;
+    }
+
+    function resumeStoryTimer() {
+      storyPaused = false;
+    }
+
+    function closeStoryViewerCleanup() {
+      clearStoryTimer();
+      const box = document.getElementById('story-viewer-media-box');
+      if (box) box.innerHTML = '';
+      toggleStoryViewersSheet(false);
+      syncAutoPostMusic();
+    }
+
+    function renderActiveStorySlide() {
+      clearStoryTimer();
+      const story = appState.storyQueue[appState.storyQueueIdx];
+      if (!story) {
+        document.getElementById('story-viewer-dialog').close();
+        return;
+      }
+      const isOwn = appState.storyIsOwn;
+      if (!isOwn) {
+        recordPostView(story.id);
+      }
+
+      // 1. Segmented Progress Bars
+      const barsEl = document.getElementById('story-progress-bars');
+      barsEl.innerHTML = appState.storyQueue.map((_, idx) => {
+        const initWidth = idx < appState.storyQueueIdx ? '100%' : '0%';
+        return `
+          <div class="flex-1 h-[2.5px] rounded-full bg-white/30 overflow-hidden">
+            <div id="story-seg-fill-${idx}" class="h-full bg-white transition-none" style="width: ${initWidth};"></div>
+          </div>
+        `;
+      }).join('');
+
+      // 2. Top Header Info
+      const avatarBox = document.getElementById('story-viewer-avatar');
+      avatarBox.innerHTML = renderAvatarInner(isOwn ? appState.user : story, 'text-[11px]');
+      document.getElementById('story-viewer-author').textContent = isOwn ? 'Your story' : (story.handle || 'user');
+      document.getElementById('story-viewer-time').textContent = formatRelativeShort(story.created_at);
+
+      document.getElementById('story-add-another-btn').classList.toggle('hidden', !isOwn);
+      document.getElementById('story-delete-btn').classList.toggle('hidden', !isOwn);
+      document.getElementById('story-report-btn').classList.toggle('hidden', isOwn);
+
+      document.getElementById('story-reply-bar').classList.toggle('hidden', isOwn);
+      document.getElementById('story-own-bar').classList.toggle('hidden', !isOwn);
+
+      if (isOwn) {
+        const viewers = story.viewers || [];
+        document.getElementById('story-own-views-label').textContent =
+          viewers.length === 0 ? 'No views yet' : `Seen by ${viewers.length}`;
+      }
+
+      // 3. Caption
+      const capWrap = document.getElementById('story-viewer-caption-wrap');
+      const capEl = document.getElementById('story-viewer-caption');
+      if (story.caption) {
+        capEl.textContent = story.caption;
+        capWrap.classList.remove('hidden');
+      } else {
+        capWrap.classList.add('hidden');
+      }
+
+      // 4. Media & Progress Fill
+      const box = document.getElementById('story-viewer-media-box');
+      storyElapsedMs = 0;
+      storyDurationMs = 5000;
+      storyPaused = false;
+
+      if ((story.media_url || '').endsWith('.mp4')) {
+        box.innerHTML = `<video id="active-story-video" src="${escapeAttr(story.media_url)}" autoplay playsinline draggable="false" oncontextmenu="return false;" class="w-full h-full object-cover pointer-events-none select-none"></video>`;
+        const vid = document.getElementById('active-story-video');
+        if (vid) {
+          vid.onloadedmetadata = () => {
+            if (vid.duration && isFinite(vid.duration)) {
+              storyDurationMs = Math.max(2000, Math.min(30000, vid.duration * 1000));
+            }
+          };
+          vid.onended = () => stepStoryQueue(1);
+        }
+      } else {
+        box.innerHTML = `<img src="${escapeAttr(story.media_url)}" alt="Story" draggable="false" oncontextmenu="return false;" class="w-full h-full object-cover pointer-events-none select-none" />`;
+      }
+
+      storyProgressTimer = setInterval(() => {
+        if (storyPaused || document.hidden) return;
+        storyElapsedMs += 50;
+        const pct = Math.min(100, (storyElapsedMs / storyDurationMs) * 100);
+        const fillEl = document.getElementById(`story-seg-fill-${appState.storyQueueIdx}`);
+        if (fillEl) fillEl.style.width = `${pct}%`;
+        if (storyElapsedMs >= storyDurationMs) {
+          stepStoryQueue(1);
+        }
+      }, 50);
+    }
+
+    function stepStoryQueue(delta) {
+      const next = appState.storyQueueIdx + delta;
+      if (next < 0) {
+        appState.storyQueueIdx = 0;
+        renderActiveStorySlide();
+        return;
+      }
+      if (next >= appState.storyQueue.length) {
+        document.getElementById('story-viewer-dialog').close();
+        return;
+      }
+      appState.storyQueueIdx = next;
+      renderActiveStorySlide();
+    }
+
+    function handleStoryAuthorTap() {
+      const story = appState.storyQueue[appState.storyQueueIdx];
+      if (!story) return;
+      document.getElementById('story-viewer-dialog').close();
+      openUserProfile(story.author_id);
+    }
+
+    async function sendStoryReplyMessage(e) {
+      e.preventDefault();
+      const input = document.getElementById('story-reply-input');
+      const text = (input?.value || '').trim();
+      const story = appState.storyQueue[appState.storyQueueIdx];
+      if (!text || !story) return;
+      input.value = '';
+      try {
+        await apiFetch('/api/messages', {
+          method: 'POST',
+          body: JSON.stringify({
+            recipient_id: story.author_id,
+            message: `Replied to your story: ${text}`
+          })
+        });
+        input.placeholder = 'Sent!';
+        setTimeout(() => {
+          if (input) input.placeholder = 'Send message...';
+        }, 1400);
+        resumeStoryTimer();
+      } catch (_e) {}
+    }
+
+    function toggleStoryViewersSheet(show) {
+      const sheet = document.getElementById('story-viewers-sheet');
+      if (!sheet) return;
+      if (!show) {
+        sheet.classList.add('hidden');
+        resumeStoryTimer();
+        return;
+      }
+      pauseStoryTimer();
+      const story = appState.storyQueue[appState.storyQueueIdx];
+      const viewers = story?.viewers || [];
+      document.getElementById('story-viewers-sheet-title').textContent = `Viewed by (${viewers.length})`;
+      const list = document.getElementById('story-viewers-list');
+      if (viewers.length === 0) {
+        list.innerHTML = `<p class="py-6 text-center text-xs text-zinc-400">No one has viewed this story yet.</p>`;
+      } else {
+        list.innerHTML = viewers.map(v => `
+          <div class="py-2.5 flex items-center justify-between gap-3">
+            <button type="button" onclick="document.getElementById('story-viewer-dialog').close();openUserProfile('${v.id}')" class="flex items-center gap-2.5 min-w-0 text-left">
+              <div class="w-9 h-9 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                ${renderAvatarInner(v, 'text-xs')}
+              </div>
+              <div class="min-w-0">
+                <p class="text-xs font-semibold text-white truncate">${escapeAttr(v.display_name)}</p>
+                <p class="text-xs text-zinc-400 truncate">@${escapeAttr(v.handle)} · ${formatRelativeShort(v.viewed_at)}</p>
+              </div>
+            </button>
+            <button type="button" onclick="document.getElementById('story-viewer-dialog').close();openChat('${v.id}')" class="px-3 py-1.5 rounded-lg bg-zinc-800 text-xs font-semibold text-white">
+              Message
+            </button>
+          </div>
+        `).join('');
+      }
+      sheet.classList.remove('hidden');
+    }
+
+    async function deleteActiveStory() {
+      const story = appState.storyQueue[appState.storyQueueIdx];
+      if (!story) return;
+      try {
+        await apiFetch('/api/delete-post', {
+          method: 'POST',
+          body: JSON.stringify({ post_id: story.id })
+        });
+        document.getElementById('story-viewer-dialog').close();
+        await loadLiveData();
+      } catch (_e) {}
+    }
+
+    async function deleteOwnPost(postId) {
+      if (!postId) return;
+      try {
+        await apiFetch('/api/delete-post', {
+          method: 'POST',
+          body: JSON.stringify({ post_id: postId })
+        });
+        await loadLiveData();
+        navigate('profile');
+      } catch (_e) {}
+    }
+
+    function reportActiveStory() {
+      const story = appState.storyQueue[appState.storyQueueIdx];
+      if (!story) return;
+      pauseStoryTimer();
+      openReportModal(story.id);
+    }
+
+    function openReportModal(postId) {
+      appState.reportingPostId = postId;
+      document.getElementById('report-post-dialog').showModal();
+    }
+
+    async function submitPostReport(reason) {
+      const postId = appState.reportingPostId;
+      if (!postId) return;
+      try {
+        const res = await apiFetch('/api/report', {
+          method: 'POST',
+          body: JSON.stringify({ post_id: postId, reason })
+        });
+        document.getElementById('report-post-dialog').close();
+        const storyDlg = document.getElementById('story-viewer-dialog');
+        if (storyDlg?.open) storyDlg.close();
+        if (res.immediately_deleted) {
+          alert('Nudity report verified: Post and media files were immediately deleted.');
+        } else {
+          alert('Report submitted to Ivris Moderation.');
+        }
+        await loadLiveData();
+      } catch (err) {
+        alert(err.message || 'Could not submit report');
+      }
+    }
+
+    // In-App Moderator Actions (when signed in as @moderator)
+    async function modTakeDownPost(postId, reason) {
+      try {
+        await apiFetch('/api/moderation/takedown', {
+          method: 'POST',
+          body: JSON.stringify({ post_id: postId, reason: reason || 'Removed by Moderator' })
+        });
+        appState.modBanner = `Post ${postId} and its media files were immediately deleted.`;
+        await loadLiveData();
+      } catch (err) {
+        alert(err.message || 'Could not delete post');
+      }
+    }
+
+    async function modDismissReport(reportId) {
+      try {
+        await apiFetch('/api/moderation/dismiss-report', {
+          method: 'POST',
+          body: JSON.stringify({ report_id: reportId })
+        });
+        appState.modBanner = `Report dismissed.`;
+        await loadLiveData();
+      } catch (_e) {}
+    }
+
+    async function modRunNuditySweep() {
+      try {
+        const res = await apiFetch('/api/moderation/sweep-nudity', {
+          method: 'POST',
+          body: JSON.stringify({})
+        });
+        appState.modBanner = `Nudity scan complete: ${res.deleted_count || 0} violating post(s) deleted.`;
+        await loadLiveData();
+      } catch (_e) {}
+    }
+
+    async function modDeleteUser(userId, handle) {
+      try {
+        await apiFetch('/api/moderation/delete-user', {
+          method: 'POST',
+          body: JSON.stringify({ user_id: userId, reason: `Account @${handle} removed by moderator` })
+        });
+        appState.modBanner = `Account @${handle} removed.`;
+        await loadLiveData();
+      } catch (_e) {}
+    }
+
+    async function modApproveInstitution(appId) {
+      try {
+        await apiFetch('/api/moderation/approve-institution', {
+          method: 'POST',
+          body: JSON.stringify({ application_id: appId })
+        });
+        appState.modBanner = `Institution application approved.`;
+        await loadLiveData();
+      } catch (_e) {}
     }
 
     function stepCarousel(postId, delta, total) {
@@ -1098,14 +2053,6 @@
       const next = (current + delta + total) % total;
       appState.carouselIndexes[postId] = next;
       render();
-    }
-
-    async function toggleLike(postId) {
-      await apiFetch('/api/like', {
-        method: 'POST',
-        body: JSON.stringify({ post_id: postId })
-      });
-      await loadLiveData();
     }
 
     async function markPostSeen(postId) {
@@ -1125,8 +2072,14 @@
     }
 
     async function openChat(partnerId) {
+      if (!partnerId) return;
+      if (appState.user && partnerId === appState.user.id) {
+        navigate('messages');
+        return;
+      }
       const partner = appState.allProfiles.find(p => p.id === partnerId);
       if (!partner) return;
+      stopPreviewAudio();
       appState.activeChatPartner = partner;
       appState.screen = 'chat';
       const data = await apiFetch(`/api/messages?partner_id=${encodeURIComponent(partnerId)}`);
@@ -1175,11 +2128,35 @@
       const post = appState.feedPosts.find(p => p.id === postId);
       if (!post) return;
       appState.selectedUserPost = post;
+      recordPostView(postId);
       navigate('userPost');
     }
 
     function escapeAttr(str) {
-      return String(str || '').replace(/"/g, '&quot;');
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    let carouselTouchStartX = 0;
+    let carouselTouchStartY = 0;
+    function handleCarouselTouchStart(e) {
+      const t = e.touches && e.touches[0];
+      if (!t) return;
+      carouselTouchStartX = t.clientX;
+      carouselTouchStartY = t.clientY;
+    }
+    function handleCarouselTouchEnd(e, postId, total) {
+      if (total < 2) return;
+      const t = e.changedTouches && e.changedTouches[0];
+      if (!t) return;
+      const dx = t.clientX - carouselTouchStartX;
+      const dy = t.clientY - carouselTouchStartY;
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+        stepCarousel(postId, dx < 0 ? 1 : -1, total);
+      }
     }
 
     function renderCarouselMedia(post) {
@@ -1189,8 +2166,11 @@
       const currentUrl = urls[idx];
 
       return `
-        <div class="relative w-full aspect-[4/5] bg-zinc-900 overflow-hidden">
-          <img src="${currentUrl}" alt="Post photo" class="w-full h-full object-cover" />
+        <div class="ivris-media relative w-full aspect-[4/5] bg-zinc-900 overflow-hidden"
+             oncontextmenu="return false"
+             ontouchstart="handleCarouselTouchStart(event)"
+             ontouchend="handleCarouselTouchEnd(event, '${post.id}', ${total})">
+          <img src="${currentUrl}" alt="Post photo" draggable="false" class="w-full h-full object-cover pointer-events-none" />
           ${total > 1 ? `
             <div class="absolute top-3 right-3 px-2.5 py-0.5 rounded-full bg-black/65 text-white text-xs font-medium">
               ${idx + 1}/${total}
@@ -1203,6 +2183,119 @@
             </button>
           ` : ''}
         </div>
+      `;
+    }
+
+    function renderModeratorConsole() {
+      const d = appState.moderationDashboard || { reports: [], active_posts: [], logs: [], users: [], institution_applications: [] };
+      const openReports = (d.reports || []).filter(r => r.status === 'open');
+      const tab = appState.modTab;
+      const tabBtn = (id, label) => `
+        <button onclick="appState.modTab='${id}';render()" class="px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap ${tab === id ? 'bg-white text-black' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">${label}</button>
+      `;
+      let content = '';
+      if (tab === 'reports') {
+        content = openReports.length === 0 ? `<p class="py-12 text-center text-xs text-zinc-500">No open reports. Nudity reports are deleted automatically.</p>` : openReports.map(r => `
+          <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800 flex gap-3">
+            ${r.media_url ? `<img src="${escapeAttr(r.media_url)}" alt="" class="w-20 h-20 rounded-xl object-cover bg-zinc-800 shrink-0" />` : `<div class="w-20 h-20 rounded-xl bg-zinc-800 shrink-0"></div>`}
+            <div class="min-w-0 flex-1 space-y-1.5">
+              <p class="text-xs font-semibold text-rose-400">${escapeAttr(r.reason)}</p>
+              <p class="text-xs text-zinc-300 truncate">@${escapeAttr(r.author_handle || 'deleted')} · ${escapeAttr(r.caption || '')}</p>
+              <p class="text-[11px] text-zinc-500">Reported by @${escapeAttr(r.reporter_handle || 'anonymous')} · ${formatRelativeShort(r.created_at)} ago</p>
+              <div class="flex gap-2 pt-1">
+                <button onclick="modTakeDownPost('${r.post_id}', 'Taken down from report: ${escapeAttr(r.reason)}')" class="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold">Take down</button>
+                <button onclick="modDismissReport('${r.id}')" class="px-3 py-1.5 rounded-lg bg-zinc-800 text-xs font-semibold">Dismiss</button>
+              </div>
+            </div>
+          </div>
+        `).join('');
+      } else if (tab === 'posts') {
+        content = (d.active_posts || []).length === 0 ? `<p class="py-12 text-center text-xs text-zinc-500">No posts on Ivris yet.</p>` : `
+          <div class="grid grid-cols-2 gap-2">
+            ${(d.active_posts || []).map(p => `
+              <div class="rounded-2xl bg-zinc-900/70 border border-zinc-800 overflow-hidden">
+                ${(p.media_url || '').endsWith('.mp4')
+                  ? `<video src="${escapeAttr(p.media_url)}" muted playsinline class="w-full aspect-square object-cover bg-zinc-800"></video>`
+                  : `<img src="${escapeAttr(p.media_url)}" alt="" class="w-full aspect-square object-cover bg-zinc-800" />`}
+                <div class="p-2.5 space-y-1.5">
+                  <p class="text-xs font-semibold truncate">@${escapeAttr(p.author_handle)}</p>
+                  <p class="text-[11px] text-zinc-400 truncate">${p.media_kind === 'video_story' ? 'Story' : 'Post'} · ${formatRelativeShort(p.created_at)} ago</p>
+                  <button onclick="modTakeDownPost('${p.id}', 'Immediate moderator takedown')" class="w-full py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold">Take down</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      } else if (tab === 'users') {
+        content = (d.users || []).map(u => `
+          <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2.5 min-w-0">
+              <div class="w-9 h-9 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">${renderAvatarInner(u, 'text-xs')}</div>
+              <div class="min-w-0">
+                <p class="text-xs font-semibold truncate">@${escapeAttr(u.handle)}</p>
+                <p class="text-[11px] text-zinc-400 truncate">${escapeAttr(u.email)} · ${escapeAttr(u.account_type)}</p>
+              </div>
+            </div>
+            <button onclick="if(confirm('Remove @${escapeAttr(u.handle)} and all their posts?'))modDeleteUser('${u.id}', '${escapeAttr(u.handle)}')" class="px-3 py-1.5 rounded-lg bg-rose-600/90 text-white text-xs font-semibold shrink-0">Remove</button>
+          </div>
+        `).join('') || `<p class="py-12 text-center text-xs text-zinc-500">No accounts.</p>`;
+      } else if (tab === 'institutions') {
+        const apps = d.institution_applications || [];
+        content = apps.length === 0 ? `<p class="py-12 text-center text-xs text-zinc-500">No institution applications.</p>` : apps.map(a => `
+          <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800 space-y-1.5">
+            <p class="text-xs font-semibold">${escapeAttr(a.institution_name)}</p>
+            <p class="text-[11px] text-zinc-400">${escapeAttr(a.official_domain)} · ${escapeAttr(a.contact_email)}</p>
+            ${a.notes ? `<p class="text-[11px] text-zinc-300">${escapeAttr(a.notes)}</p>` : ''}
+            ${a.status === 'approved'
+              ? `<span class="inline-block px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 text-[11px] font-semibold">Approved</span>`
+              : `<button onclick="modApproveInstitution('${a.id}')" class="px-3 py-1.5 rounded-lg bg-sky-500 text-white text-xs font-semibold">Approve & verify</button>`}
+          </div>
+        `).join('');
+      } else {
+        content = (d.logs || []).map(l => `
+          <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800 space-y-1">
+            <div class="flex items-center justify-between gap-2">
+              <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold ${l.action === 'auto_deleted_nudity' ? 'bg-rose-500/20 text-rose-300' : 'bg-sky-500/20 text-sky-300'}">${escapeAttr(l.action.replace(/_/g, ' '))}</span>
+              <span class="text-[11px] text-zinc-500">${formatRelativeShort(l.created_at)} ago</span>
+            </div>
+            <p class="text-xs text-zinc-300">@${escapeAttr(l.author_handle || 'unknown')} · ${escapeAttr(l.reason)}</p>
+          </div>
+        `).join('') || `<p class="py-12 text-center text-xs text-zinc-500">No moderation activity yet.</p>`;
+      }
+
+      return `
+        <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black z-20">
+          <div>
+            <h1 id="screen-heading" tabindex="-1" class="text-lg font-bold focus:outline-none" style="font-family: Georgia, serif;">Ivris Moderation</h1>
+            <p class="text-[11px] text-zinc-400">@${escapeAttr(appState.user.handle)} · Nudity auto-delete on</p>
+          </div>
+          <button onclick="signOut()" class="px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs font-semibold">Log out</button>
+        </header>
+        <main class="flex-1 px-4 py-4 space-y-4 pb-10">
+          ${appState.modBanner ? `
+            <div role="status" class="p-3 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-300 text-xs flex items-center justify-between gap-2">
+              <span>${escapeAttr(appState.modBanner)}</span>
+              <button onclick="appState.modBanner='';render()" class="text-zinc-400">✕</button>
+            </div>
+          ` : ''}
+          <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800"><p class="text-lg font-bold">${openReports.length}</p><p class="text-[11px] text-zinc-400">Open reports</p></div>
+            <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800"><p class="text-lg font-bold">${(d.active_posts || []).length}</p><p class="text-[11px] text-zinc-400">Live posts</p></div>
+            <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800"><p class="text-lg font-bold">${(d.logs || []).filter(l => l.action === 'auto_deleted_nudity').length}</p><p class="text-[11px] text-zinc-400">Auto-deleted</p></div>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <button onclick="modRunNuditySweep()" class="py-2.5 rounded-xl bg-rose-600 text-white text-xs font-semibold">Scan & delete nudity</button>
+            <button onclick="loadLiveData()" class="py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-semibold">Refresh</button>
+          </div>
+          <nav class="flex gap-2 overflow-x-auto no-scrollbar">
+            ${tabBtn('reports', `Reports (${openReports.length})`)}
+            ${tabBtn('posts', 'All posts')}
+            ${tabBtn('users', 'Accounts')}
+            ${tabBtn('institutions', 'Institutions')}
+            ${tabBtn('logs', 'Log')}
+          </nav>
+          <div class="space-y-2.5">${content}</div>
+        </main>
       `;
     }
 
@@ -1296,6 +2389,13 @@
 
       // 2. Signed In View
       const uid = appState.user.id;
+
+      if (appState.user.account_type === 'moderator') {
+        root.innerHTML = renderModeratorConsole();
+        stopPreviewAudio();
+        return;
+      }
+
       const incomingReqs = appState.connections.filter(c => c.addressee_id === uid && c.status === 'pending').length;
 
       let headerHtml = '';
@@ -1380,29 +2480,39 @@
           ? appState.feedPosts.filter(p => !appState.seenPostIds.includes(p.id))
           : appState.feedPosts;
         const hasMyStory = appState.myStories.length > 0;
-        const myInitials = (appState.user.handle || 'U').slice(0, 2).toUpperCase();
 
-        // Always-visible "Your story" bubble on the Home screen
+        // Group friends' stories by author (one bubble per person, unseen first — like Instagram)
+        const storyAuthors = [];
+        const seenAuthorIds = new Set();
+        for (const st of appState.stories) {
+          if (seenAuthorIds.has(st.author_id)) continue;
+          seenAuthorIds.add(st.author_id);
+          const authorStories = appState.stories.filter(s => s.author_id === st.author_id);
+          const allViewed = authorStories.every(s => appState.viewedPostIds.includes(s.id));
+          storyAuthors.push({ ...st, allViewed });
+        }
+        storyAuthors.sort((a, b) => Number(a.allViewed) - Number(b.allViewed));
+
         const storiesBar = `
-          <div class="px-4 pt-1.5 pb-3 border-b border-zinc-900 flex gap-4 overflow-x-auto no-scrollbar">
-            <button onclick="handleYourStoryClick()" class="flex flex-col items-center gap-1.5 shrink-0">
-              <div class="relative p-[3px] rounded-full ${hasMyStory ? 'ig-ring-friend' : 'bg-zinc-800'}">
-                <div class="w-[76px] h-[76px] rounded-full bg-zinc-900 border-[2.5px] border-black flex items-center justify-center text-base font-bold">
-                  ${myInitials}
+          <div class="px-3 pt-1.5 pb-3 border-b border-zinc-900 flex gap-3.5 overflow-x-auto no-scrollbar">
+            <button onclick="handleYourStoryClick()" class="flex flex-col items-center gap-1 shrink-0 w-[78px]">
+              <div class="relative p-[2.5px] rounded-full ${hasMyStory ? 'ig-ring-friend' : ''}">
+                <div class="w-[72px] h-[72px] rounded-full bg-zinc-800 border-[2.5px] border-black overflow-hidden flex items-center justify-center">
+                  ${renderAvatarInner(appState.user, 'text-base')}
                 </div>
-                <span onclick="event.stopPropagation();openComposeWithKind('video_story')" class="absolute bottom-0 right-0 w-7 h-7 rounded-full bg-zinc-900 text-white border-[2.5px] border-black flex items-center justify-center text-base font-bold leading-none">+</span>
+                <span onclick="event.stopPropagation();openComposeWithKind('video_story')" class="absolute bottom-0 right-0 w-6 h-6 rounded-full bg-[#0095f6] text-white border-[2.5px] border-black flex items-center justify-center text-sm font-bold leading-none">+</span>
               </div>
-              <span class="text-xs text-zinc-200 max-w-[82px] truncate">Your story</span>
+              <span class="text-[11px] text-zinc-300 max-w-[78px] truncate">Your story</span>
             </button>
 
-            ${appState.stories.map((st, idx) => `
-              <button onclick="openStoryViewer(appState.stories[${idx}], false)" class="flex flex-col items-center gap-1.5 shrink-0">
-                <div class="p-[3px] rounded-full ${st.is_verified_institution ? 'ig-ring-institution' : 'ig-ring-friend'}">
-                  <div class="w-[76px] h-[76px] rounded-full bg-zinc-900 border-[2.5px] border-black flex items-center justify-center text-base font-bold">
-                    ${(st.handle || 'U').slice(0, 2).toUpperCase()}
+            ${storyAuthors.map(st => `
+              <button onclick="openAuthorStories('${st.author_id}')" class="flex flex-col items-center gap-1 shrink-0 w-[78px]">
+                <div class="p-[2.5px] rounded-full ${st.allViewed ? 'ig-ring-seen' : (st.is_verified_institution ? 'ig-ring-institution' : 'ig-ring-friend')}">
+                  <div class="w-[72px] h-[72px] rounded-full bg-zinc-800 border-[2.5px] border-black overflow-hidden flex items-center justify-center">
+                    ${renderAvatarInner(st, 'text-base')}
                   </div>
                 </div>
-                <span class="text-xs max-w-[82px] truncate">${st.handle || 'user'}</span>
+                <span class="text-[11px] ${st.allViewed ? 'text-zinc-500' : 'text-white'} max-w-[78px] truncate">${escapeAttr(st.handle || 'user')}</span>
               </button>
             `).join('')}
           </div>
@@ -1432,40 +2542,52 @@
           const curIdx = Math.min(appState.carouselIndexes[post.id] || 0, urls.length - 1);
 
           return `
-            <article ${post.music && post.music.preview_url ? `data-music-post-id="${post.id}"` : ''} class="border-b border-zinc-900 pb-3">
-              <div class="px-3.5 py-2.5 flex items-center justify-between">
-                <div class="min-w-0">
-                  <button type="button" onclick="openUserProfile('${post.author_id}')" class="flex items-center gap-1 text-left hover:opacity-80">
-                    <span class="text-xs font-semibold">${post.handle}</span>
-                    ${post.is_verified_institution ? VERIFIED_SVG : ''}
-                  </button>
-                  ${post.music && post.music.title ? `
-                    <div class="flex items-center gap-1 text-xs text-zinc-300 truncate max-w-[260px]">
-                      <svg class="w-3 h-3 text-sky-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
-                      </svg>
-                      <span class="truncate">${escapeAttr(post.music.artist)} · ${escapeAttr(post.music.title)}</span>
+            <article data-post-id="${post.id}" ${post.music && post.music.preview_url ? `data-music-post-id="${post.id}"` : ''} class="feed-post-card border-b border-zinc-900 pb-3">
+              <div class="px-3 py-2 flex items-center justify-between gap-2">
+                <button type="button" onclick="openUserProfile('${post.author_id}')" class="flex items-center gap-2.5 min-w-0 text-left">
+                  <div class="w-8 h-8 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                    ${renderAvatarInner(post, 'text-[11px]')}
+                  </div>
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-1">
+                      <span class="text-[13px] font-semibold truncate">${escapeAttr(post.handle)}</span>
+                      ${post.is_verified_institution ? VERIFIED_SVG : ''}
                     </div>
-                  ` : (post.location_label ? `<p class="text-xs text-zinc-400">${post.location_label}</p>` : '')}
+                    ${post.music && post.music.title ? `
+                      <div class="flex items-center gap-1 text-[11px] text-zinc-300 truncate max-w-[230px]">
+                        <svg class="w-3 h-3 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                        <span class="truncate">${escapeAttr(post.music.artist)} · ${escapeAttr(post.music.title)}</span>
+                      </div>
+                    ` : (post.location_label ? `<p class="text-[11px] text-zinc-300 truncate">${escapeAttr(post.location_label)}</p>` : '')}
+                  </div>
+                </button>
+                <div class="flex items-center gap-1 shrink-0">
+                  <button onclick="markPostSeen('${post.id}')" class="px-2 py-1 text-xs text-zinc-400">Done</button>
+                  ${post.author_id !== uid ? `
+                    <button onclick="openReportModal('${post.id}')" aria-label="More options" class="w-8 h-8 flex items-center justify-center text-zinc-300">
+                      <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+                    </button>
+                  ` : ''}
                 </div>
-                <button onclick="markPostSeen('${post.id}')" class="text-xs text-zinc-400 shrink-0">Done</button>
               </div>
 
               ${renderCarouselMedia(post)}
 
-              <!-- Action Bar: Like counts are never shown on other people's posts -->
-              <div class="px-3.5 pt-2.5 pb-1.5 flex items-center justify-between">
+              <!-- Action Bar: message only (no likes on Ivris) -->
+              <div class="px-3 pt-2.5 pb-1.5 flex items-center justify-between">
                 <div class="flex items-center gap-4">
-                  <button onclick="toggleLike('${post.id}')">
-                    <svg class="w-6 h-6 ${post.likedByMe ? 'text-[#ff3040]' : ''}" fill="${post.likedByMe ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
-                    </svg>
-                  </button>
-                  <button onclick="openChat('${post.author_id}')">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
-                    </svg>
-                  </button>
+                  ${post.author_id !== uid ? `
+                    <button onclick="openChat('${post.author_id}')" aria-label="Message ${escapeAttr(post.handle)}">
+                      <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                      </svg>
+                    </button>
+                  ` : `
+                    <button onclick="openMyPostInsights('${post.id}')" class="flex items-center gap-1.5 text-xs text-zinc-300">
+                      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                      <span>${post.viewsCount || 0} viewed</span>
+                    </button>
+                  `}
                 </div>
 
                 ${urls.length > 1 ? `
@@ -1477,9 +2599,9 @@
                 ` : '<div></div>'}
               </div>
 
-              <div class="px-3.5">
-                <p class="text-xs leading-relaxed">
-                  <button type="button" onclick="openUserProfile('${post.author_id}')" class="font-semibold mr-1.5 hover:underline">${post.handle}</button>${post.caption || ''}
+              <div class="px-3">
+                <p class="text-[13px] leading-relaxed">
+                  <button type="button" onclick="openUserProfile('${post.author_id}')" class="font-semibold mr-1.5">${escapeAttr(post.handle)}</button>${escapeAttr(post.caption || '')}
                 </p>
               </div>
             </article>
@@ -1542,8 +2664,8 @@
                 return `
                   <div class="py-3 px-4 flex items-center justify-between gap-3">
                     <button type="button" onclick="openUserProfile('${item.id}')" class="flex items-center gap-3 min-w-0 flex-1 text-left hover:opacity-85">
-                      <div class="w-11 h-11 rounded-full bg-zinc-900 flex items-center justify-center font-semibold text-xs shrink-0">
-                        ${item.handle.slice(0, 2).toUpperCase()}
+                      <div class="w-11 h-11 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                        ${renderAvatarInner(item, 'text-xs')}
                       </div>
                       <div class="min-w-0">
                         <div class="flex items-center gap-1">
@@ -1609,9 +2731,12 @@
           <div class="space-y-4 pt-4">
             <div class="px-4 space-y-3">
               <div class="flex items-center justify-between">
-                <div class="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center text-base font-bold">
-                  ${(appState.user.handle || 'U').slice(0, 2).toUpperCase()}
-                </div>
+                <button type="button" onclick="document.getElementById('quick-avatar-input').click()" aria-label="Change profile photo" class="relative shrink-0">
+                  <div class="w-[84px] h-[84px] rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center">
+                    ${renderAvatarInner(appState.user, 'text-xl')}
+                  </div>
+                  <span class="absolute bottom-0 right-0 w-6 h-6 rounded-full bg-[#0095f6] text-white border-2 border-black flex items-center justify-center text-sm font-bold leading-none">+</span>
+                </button>
                 <div class="flex items-center gap-6 pr-4 text-center">
                   <div>
                     <div class="text-sm font-bold">${appState.myPosts.length}</div>
@@ -1644,8 +2769,12 @@
               ${appState.myPosts.map(p => {
                 const count = (p.media_urls && p.media_urls.length) || 1;
                 return `
-                  <button onclick="openMyPostInsights('${p.id}')" class="aspect-square bg-zinc-900 overflow-hidden relative">
-                    <img src="${p.media_url}" alt="Your post" class="w-full h-full object-cover" />
+                  <button onclick="openMyPostInsights('${p.id}')" class="ivris-media aspect-square bg-zinc-900 overflow-hidden relative" oncontextmenu="return false">
+                    <img src="${p.media_url}" alt="Your post" draggable="false" class="w-full h-full object-cover pointer-events-none" />
+                    <span class="absolute bottom-1.5 left-1.5 flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/60 text-[11px] font-semibold text-white">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                      ${p.viewsCount || 0}
+                    </span>
                     ${count > 1 ? `
                       <span class="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/65 text-xs font-semibold text-white">
                         1/${count}
@@ -1665,8 +2794,8 @@
             <!-- Profile Quick Card -->
             <button onclick="openEditProfileModal()" class="w-full p-3.5 rounded-2xl bg-zinc-900/70 border border-zinc-800/80 flex items-center justify-between text-left hover:bg-zinc-900 transition">
               <div class="flex items-center gap-3 min-w-0">
-                <div class="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-bold shrink-0">
-                  ${initials}
+                <div class="w-12 h-12 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                  ${renderAvatarInner(appState.user, 'text-sm')}
                 </div>
                 <div class="min-w-0">
                   <p class="text-sm font-semibold truncate">${escapeAttr(appState.user.display_name)}</p>
@@ -1831,12 +2960,40 @@
               </div>
             ` : ''}
             ${renderCarouselMedia(p)}
-            <div class="px-4 pt-3 space-y-2">
-              <div class="p-2.5 rounded-xl bg-zinc-900 flex items-center justify-between">
-                <span class="text-xs font-semibold">${p.ownerOnlyLikesCount || 0} likes</span>
-                <span class="text-xs text-zinc-400">Visible only to you</span>
+            <div class="px-4 pt-3 space-y-3">
+              <p class="text-[13px]"><span class="font-semibold mr-1.5">${escapeAttr(appState.user.handle)}</span>${escapeAttr(p.caption || '')}</p>
+
+              <div class="rounded-2xl bg-zinc-900/70 border border-zinc-800/80 overflow-hidden">
+                <div class="px-4 py-3 flex items-center justify-between border-b border-zinc-800/70">
+                  <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-zinc-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                    <span class="text-xs font-semibold">Viewed by ${(p.viewers || []).length}</span>
+                  </div>
+                  <span class="text-xs text-zinc-500">Only you can see this</span>
+                </div>
+                <div class="divide-y divide-zinc-800/60">
+                  ${(p.viewers || []).length === 0 ? `
+                    <p class="px-4 py-6 text-center text-xs text-zinc-500">No one has viewed this post yet.</p>
+                  ` : (p.viewers || []).map(v => `
+                    <div class="px-4 py-2.5 flex items-center justify-between gap-3">
+                      <button type="button" onclick="openUserProfile('${v.id}')" class="flex items-center gap-2.5 min-w-0 text-left">
+                        <div class="w-9 h-9 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                          ${renderAvatarInner(v, 'text-xs')}
+                        </div>
+                        <div class="min-w-0">
+                          <p class="text-xs font-semibold truncate">${escapeAttr(v.handle)}</p>
+                          <p class="text-xs text-zinc-400 truncate">${escapeAttr(v.display_name)} · ${formatRelativeShort(v.viewed_at)}</p>
+                        </div>
+                      </button>
+                      <button type="button" onclick="openChat('${v.id}')" class="px-3 py-1.5 rounded-lg bg-zinc-800 text-xs font-semibold">Message</button>
+                    </div>
+                  `).join('')}
+                </div>
               </div>
-              <p class="text-xs"><span class="font-semibold mr-1.5">${appState.user.handle}</span>${p.caption || ''}</p>
+
+              <button type="button" onclick="deleteOwnPost('${p.id}')" class="w-full py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-semibold text-rose-400">
+                Delete post
+              </button>
             </div>
           </article>
         `;
@@ -1864,8 +3021,8 @@
           <div class="space-y-4 pt-4">
             <div class="px-4 space-y-3">
               <div class="flex items-center justify-between">
-                <div class="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center text-base font-bold">
-                  ${(prof.handle || 'U').slice(0, 2).toUpperCase()}
+                <div class="w-[84px] h-[84px] rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                  ${renderAvatarInner(prof, 'text-xl')}
                 </div>
                 <div class="flex items-center gap-6 pr-4 text-center">
                   <div>
@@ -1909,8 +3066,8 @@
                   ${userPosts.map(p => {
                     const count = (p.media_urls && p.media_urls.length) || 1;
                     return `
-                      <button onclick="openUserPost('${p.id}')" class="aspect-square bg-zinc-900 overflow-hidden relative">
-                        <img src="${p.media_url}" alt="Post by ${escapeAttr(prof.handle)}" class="w-full h-full object-cover" />
+                      <button onclick="openUserPost('${p.id}')" class="ivris-media aspect-square bg-zinc-900 overflow-hidden relative" oncontextmenu="return false">
+                        <img src="${p.media_url}" alt="Post by ${escapeAttr(prof.handle)}" draggable="false" class="w-full h-full object-cover pointer-events-none" />
                         ${count > 1 ? `
                           <span class="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/65 text-xs font-semibold text-white">
                             1/${count}
@@ -1956,18 +3113,16 @@
 
             ${renderCarouselMedia(p)}
 
-            <!-- Action Bar: Like counts are never shown on other people's posts -->
+            <!-- Action Bar: message only (no likes on Ivris) -->
             <div class="px-3.5 pt-2.5 pb-1.5 flex items-center justify-between">
               <div class="flex items-center gap-4">
-                <button onclick="toggleLike('${p.id}')">
-                  <svg class="w-6 h-6 ${p.likedByMe ? 'text-[#ff3040]' : ''}" fill="${p.likedByMe ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
-                  </svg>
-                </button>
-                <button onclick="openChat('${p.author_id}')">
+                <button onclick="openChat('${p.author_id}')" aria-label="Message ${escapeAttr(p.handle)}">
                   <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
                   </svg>
+                </button>
+                <button onclick="openReportModal('${p.id}')" aria-label="Report post" class="text-zinc-400">
+                  <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
                 </button>
               </div>
               ${urls.length > 1 ? `
@@ -2009,8 +3164,8 @@
               <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7.5"/><path stroke-linecap="round" d="M20 20l-3.8-3.8"/></svg>
             </button>
             <button onclick="navigate('profile')" aria-label="Profile" class="nav-pill-item ${isProfileTab ? 'bg-zinc-800 text-white' : 'text-zinc-300 opacity-85 hover:opacity-100'}">
-              <div class="w-7 h-7 rounded-full bg-zinc-700 ${isProfileTab ? 'ring-2 ring-white' : ''} flex items-center justify-center text-xs font-bold text-white">
-                ${(appState.user.handle || 'U').slice(0, 1).toUpperCase()}
+              <div class="w-7 h-7 rounded-full bg-zinc-700 overflow-hidden ${isProfileTab ? 'ring-2 ring-white' : ''} flex items-center justify-center">
+                ${renderAvatarInner(appState.user, 'text-xs')}
               </div>
             </button>
           </nav>
@@ -2107,10 +3262,46 @@
     }
 
     setInterval(pollLiveStateSilently, 5000);
-    window.addEventListener('focus', pollLiveStateSilently);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') pollLiveStateSilently();
+    window.addEventListener('focus', () => {
+      pollLiveStateSilently();
+      syncAutoPostMusic();
     });
+    window.addEventListener('blur', () => {
+      stopPreviewAudio();
+      pauseStoryTimer();
+    });
+    window.addEventListener('pagehide', () => {
+      stopPreviewAudio();
+    });
+    window.addEventListener('beforeunload', () => {
+      stopPreviewAudio();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden || document.visibilityState !== 'visible') {
+        stopPreviewAudio();
+        pauseStoryTimer();
+      } else {
+        pollLiveStateSilently();
+        syncAutoPostMusic();
+      }
+    });
+    window.addEventListener('scroll', checkActiveMusicViewportVisibility, { passive: true });
+    window.addEventListener('resize', checkActiveMusicViewportVisibility, { passive: true });
+
+    // Global contextmenu prevention to eliminate iOS Safari "Save Photo" sheet and subject-drag morphing
+    window.addEventListener('contextmenu', (e) => {
+      if (
+        e.target.tagName === 'IMG' ||
+        e.target.tagName === 'VIDEO' ||
+        e.target.closest('.ivris-media') ||
+        e.target.closest('article') ||
+        e.target.closest('#story-viewer-dialog') ||
+        e.target.closest('dialog')
+      ) {
+        e.preventDefault();
+        return false;
+      }
+    }, { capture: true, passive: false });
 
     if (appState.user) {
       render();
