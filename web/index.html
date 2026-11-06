@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#000000" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black" />
@@ -76,37 +76,36 @@
       outline: 3px solid #38bdf8;
       outline-offset: 4px;
     }
-    /* iPhone Dynamic Island / Status Bar & Bottom Bar Spacing */
+    /* iPhone Status Bar & Floating Pill Dock Spacing */
     .safe-top-header {
-      padding-top: 14px;
-      padding-bottom: 10px;
-    }
-    .safe-bottom-nav {
-      padding-top: 6px;
+      padding-top: 8px;
       padding-bottom: 6px;
-    }
-    @media (display-mode: standalone), (pointer: coarse) {
-      .safe-top-header {
-        padding-top: max(calc(env(safe-area-inset-top, 59px) + 12px), 68px);
-        padding-bottom: 10px;
-      }
-      .safe-bottom-nav {
-        padding-top: 6px;
-        padding-bottom: 6px;
-      }
     }
     /* Accessible Target Sizes (per modern-web-guidance: accessibility) */
     .nav-touch-target {
-      min-block-size: 38px;
+      min-block-size: 40px;
       min-inline-size: 44px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
     }
+    .nav-pill-item {
+      min-block-size: 46px;
+      min-inline-size: 62px;
+      border-radius: 9999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.18s ease, opacity 0.18s ease;
+    }
     @media (pointer: coarse) {
       .nav-touch-target {
-        min-block-size: 40px;
-        min-inline-size: 48px;
+        min-block-size: 42px;
+        min-inline-size: 46px;
+      }
+      .nav-pill-item {
+        min-block-size: 48px;
+        min-inline-size: 64px;
       }
     }
   </style>
@@ -1216,21 +1215,19 @@
         `;
       } else {
         headerHtml = `
-          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black z-20">
-            <h1 id="screen-heading" tabindex="-1" class="text-[26px] font-bold tracking-tight focus:outline-none leading-none" style="font-family: Georgia, serif;">Ivris</h1>
-            <div class="flex items-center gap-2 -mr-2">
-              <button onclick="navigate('search', 'requests')" aria-label="Requests" class="nav-touch-target relative">
-                <svg class="w-[26px] h-[26px]" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
-                </svg>
-                ${incomingReqs > 0 ? `<span class="absolute top-1.5 right-2 w-2.5 h-2.5 rounded-full bg-[#ff3040]"></span>` : ''}
-              </button>
-              <button onclick="navigate('messages')" aria-label="Direct Messages" class="nav-touch-target">
-                <svg class="w-[26px] h-[26px]" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
-                </svg>
-              </button>
-            </div>
+          <header class="px-4 safe-top-header flex items-center justify-between sticky top-0 bg-black z-20">
+            <button onclick="openComposeWithKind('photo_post')" aria-label="Create post" class="nav-touch-target -ml-2">
+              <svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14"/>
+              </svg>
+            </button>
+            <h1 id="screen-heading" tabindex="-1" class="text-[26px] font-bold tracking-tight focus:outline-none leading-none text-center" style="font-family: Georgia, serif;">Ivris</h1>
+            <button onclick="navigate('search', 'requests')" aria-label="Requests" class="nav-touch-target relative -mr-2">
+              <svg class="w-[26px] h-[26px]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
+              </svg>
+              ${incomingReqs > 0 ? `<span class="absolute top-1.5 right-2 w-2.5 h-2.5 rounded-full bg-[#ff3040]"></span>` : ''}
+            </button>
           </header>
         `;
       }
@@ -1247,25 +1244,25 @@
 
         // Always-visible "Your story" bubble on the Home screen
         const storiesBar = `
-          <div class="px-4 py-3.5 border-b border-zinc-900 flex gap-4 overflow-x-auto no-scrollbar">
+          <div class="px-4 pt-1.5 pb-3 border-b border-zinc-900 flex gap-4 overflow-x-auto no-scrollbar">
             <button onclick="handleYourStoryClick()" class="flex flex-col items-center gap-1.5 shrink-0">
-              <div class="relative p-[2.5px] rounded-full ${hasMyStory ? 'ig-ring-friend' : 'bg-zinc-800'}">
-                <div class="w-[68px] h-[68px] rounded-full bg-zinc-900 border-2 border-black flex items-center justify-center text-sm font-bold">
+              <div class="relative p-[3px] rounded-full ${hasMyStory ? 'ig-ring-friend' : 'bg-zinc-800'}">
+                <div class="w-[76px] h-[76px] rounded-full bg-zinc-900 border-[2.5px] border-black flex items-center justify-center text-base font-bold">
                   ${myInitials}
                 </div>
-                <span onclick="event.stopPropagation();openComposeWithKind('video_story')" class="absolute bottom-0 right-0 w-6 h-6 rounded-full bg-sky-500 text-white border-2 border-black flex items-center justify-center text-sm font-bold leading-none">+</span>
+                <span onclick="event.stopPropagation();openComposeWithKind('video_story')" class="absolute bottom-0 right-0 w-7 h-7 rounded-full bg-zinc-900 text-white border-[2.5px] border-black flex items-center justify-center text-base font-bold leading-none">+</span>
               </div>
-              <span class="text-xs text-zinc-200 max-w-[74px] truncate">Your story</span>
+              <span class="text-xs text-zinc-200 max-w-[82px] truncate">Your story</span>
             </button>
 
             ${appState.stories.map((st, idx) => `
               <button onclick="openStoryViewer(appState.stories[${idx}], false)" class="flex flex-col items-center gap-1.5 shrink-0">
-                <div class="p-[2.5px] rounded-full ${st.is_verified_institution ? 'ig-ring-institution' : 'ig-ring-friend'}">
-                  <div class="w-[68px] h-[68px] rounded-full bg-zinc-900 border-2 border-black flex items-center justify-center text-sm font-bold">
+                <div class="p-[3px] rounded-full ${st.is_verified_institution ? 'ig-ring-institution' : 'ig-ring-friend'}">
+                  <div class="w-[76px] h-[76px] rounded-full bg-zinc-900 border-[2.5px] border-black flex items-center justify-center text-base font-bold">
                     ${(st.handle || 'U').slice(0, 2).toUpperCase()}
                   </div>
                 </div>
-                <span class="text-xs max-w-[74px] truncate">${st.handle || 'user'}</span>
+                <span class="text-xs max-w-[82px] truncate">${st.handle || 'user'}</span>
               </button>
             `).join('')}
           </div>
@@ -1705,23 +1702,33 @@
         `;
       }
 
+      const isProfileTab = ['profile', 'settings', 'myPost'].includes(appState.screen);
+      const isMessagesTab = ['messages', 'chat'].includes(appState.screen);
+
       const footerNav = `
-        <nav aria-label="Bottom Navigation" class="px-6 safe-bottom-nav border-t border-zinc-900 flex items-center justify-between sticky bottom-0 bg-black z-20">
-          <button onclick="navigate('main')" aria-label="Home" class="nav-touch-target ${appState.screen === 'main' ? 'opacity-100' : 'opacity-50'}">
-            <svg class="w-7 h-7" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1v-9.5z"/></svg>
-          </button>
-          <button onclick="navigate('search')" aria-label="Search" class="nav-touch-target ${appState.screen === 'search' ? 'opacity-100' : 'opacity-50'}">
-            <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7.5"/><path stroke-linecap="round" d="M20 20l-3.8-3.8"/></svg>
-          </button>
-          <button onclick="openComposeWithKind('photo_post')" aria-label="New Share" class="nav-touch-target opacity-80 hover:opacity-100">
-            <svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2.1" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><path stroke-linecap="round" d="M12 8v8M8 12h8"/></svg>
-          </button>
-          <button onclick="navigate('profile')" aria-label="Profile" class="nav-touch-target ${['profile', 'settings', 'myPost'].includes(appState.screen) ? 'opacity-100' : 'opacity-55'}">
-            <div class="w-7 h-7 rounded-full bg-zinc-800 ${['profile', 'settings', 'myPost'].includes(appState.screen) ? 'ring-2 ring-white' : ''} flex items-center justify-center text-xs font-bold">
-              ${(appState.user.handle || 'U').slice(0, 1).toUpperCase()}
-            </div>
-          </button>
-        </nav>
+        <div class="sticky bottom-0 pb-4 pt-2 px-5 bg-gradient-to-t from-black via-black/90 to-transparent z-20">
+          <nav aria-label="Bottom Navigation" class="p-1.5 rounded-full bg-zinc-900/95 backdrop-blur-xl border border-zinc-800/90 shadow-2xl flex items-center justify-between">
+            <button onclick="navigate('main')" aria-label="Home" class="nav-pill-item ${appState.screen === 'main' ? 'bg-zinc-800 text-white' : 'text-zinc-300 opacity-75 hover:opacity-100'}">
+              <svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1v-9.5z"/></svg>
+            </button>
+            <button onclick="openComposeWithKind('photo_post')" aria-label="New Share" class="nav-pill-item text-zinc-300 opacity-85 hover:opacity-100">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><path stroke-linecap="round" d="M12 8v8M8 12h8"/></svg>
+            </button>
+            <button onclick="navigate('messages')" aria-label="Direct Messages" class="nav-pill-item ${isMessagesTab ? 'bg-zinc-800 text-white' : 'text-zinc-300 opacity-75 hover:opacity-100'}">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+              </svg>
+            </button>
+            <button onclick="navigate('search')" aria-label="Search" class="nav-pill-item ${appState.screen === 'search' ? 'bg-zinc-800 text-white' : 'text-zinc-300 opacity-75 hover:opacity-100'}">
+              <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7.5"/><path stroke-linecap="round" d="M20 20l-3.8-3.8"/></svg>
+            </button>
+            <button onclick="navigate('profile')" aria-label="Profile" class="nav-pill-item ${isProfileTab ? 'bg-zinc-800 text-white' : 'text-zinc-300 opacity-85 hover:opacity-100'}">
+              <div class="w-7 h-7 rounded-full bg-zinc-700 ${isProfileTab ? 'ring-2 ring-white' : ''} flex items-center justify-center text-xs font-bold text-white">
+                ${(appState.user.handle || 'U').slice(0, 1).toUpperCase()}
+              </div>
+            </button>
+          </nav>
+        </div>
       `;
 
       root.innerHTML = `${headerHtml}<main class="flex-1">${bodyHtml}</main>${footerNav}`;
