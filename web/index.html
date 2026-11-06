@@ -1,0 +1,1741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Ivris" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+  <title>Ivris</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      background-color: #000000;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    dialog::backdrop {
+      background-color: rgba(0, 0, 0, 0.78);
+      backdrop-filter: blur(6px);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      ::view-transition-group(*),
+      ::view-transition-old(*),
+      ::view-transition-new(*) {
+        animation: none !important;
+      }
+    }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .ig-ring-friend {
+      background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%);
+    }
+    .ig-ring-institution {
+      background: linear-gradient(135deg, #38bdf8 0%, #fbbf24 55%, #2563eb 100%);
+    }
+    /* Accessible Switch Control Styling (per modern-web-guidance: switch) */
+    input[type="checkbox"][switch].ivris-switch {
+      -webkit-appearance: none;
+      appearance: none;
+      position: relative;
+      width: 44px;
+      height: 26px;
+      border-radius: 9999px;
+      background-color: #27272a;
+      border: 1px solid #3f3f46;
+      margin: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
+    }
+    input[type="checkbox"][switch].ivris-switch::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background-color: #ffffff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+      transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    input[type="checkbox"][switch].ivris-switch:checked {
+      background-color: #0095f6;
+      border-color: #0095f6;
+    }
+    input[type="checkbox"][switch].ivris-switch:checked::after {
+      transform: translateX(18px);
+    }
+    input[type="checkbox"][switch].ivris-switch:focus-visible {
+      outline: 3px solid #38bdf8;
+      outline-offset: 4px;
+    }
+  </style>
+</head>
+<body class="bg-black text-white antialiased min-h-screen flex justify-center">
+  <div id="app-root" class="w-full max-w-[430px] min-h-screen bg-black border-x border-zinc-900 flex flex-col justify-between relative">
+    <!-- Dynamically rendered by JS -->
+  </div>
+
+  <!-- New Post (Up to 15 Photos) / Story Modal (Light-Dismiss enabled via closedby="any") -->
+  <dialog id="compose-dialog" closedby="any" aria-labelledby="compose-dialog-title" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
+    <div class="space-y-4">
+      <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+        <h3 id="compose-dialog-title" class="text-sm font-semibold">New Share</h3>
+        <form method="dialog">
+          <button type="submit" class="text-xs text-zinc-400 hover:text-white">Cancel</button>
+        </form>
+      </div>
+
+      <div class="flex border-b border-zinc-800 text-xs font-semibold">
+        <button id="tab-kind-photo" onclick="setComposeKind('photo_post')" class="flex-1 pb-2.5 border-b-2 border-white text-white">
+          Feed Photos (Up to 15)
+        </button>
+        <button id="tab-kind-story" onclick="setComposeKind('video_story')" class="flex-1 pb-2.5 border-b-2 border-transparent text-zinc-500">
+          24h Story
+        </button>
+      </div>
+
+      <div class="space-y-3">
+        <label class="block">
+          <span id="compose-file-hint" class="text-xs text-zinc-400 block mb-1.5">Select up to 15 photos</span>
+          <input id="media-file-input" type="file" accept="image/*" multiple onchange="handleFileSelectionPreview()" class="w-full text-xs text-zinc-300 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-zinc-800 file:text-white hover:file:bg-zinc-700" />
+        </label>
+
+        <div id="compose-preview-strip" class="hidden flex gap-2 overflow-x-auto no-scrollbar py-1"></div>
+
+        <!-- Add Music to Image Post Section -->
+        <div id="compose-music-section" class="space-y-2">
+          <button type="button" id="add-music-trigger-btn" onclick="openMusicPickerModal()" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-between text-xs text-white hover:border-zinc-700 transition">
+            <span class="flex items-center gap-2.5 font-medium">
+              <svg class="w-4 h-4 text-sky-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
+              </svg>
+              Add music
+            </span>
+            <span class="text-zinc-400">Search songs ›</span>
+          </button>
+
+          <div id="selected-music-pill" class="hidden p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-between gap-2.5">
+            <div class="flex items-center gap-2.5 min-w-0">
+              <img id="selected-music-art" src="" alt="Album art" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" />
+              <div class="min-w-0">
+                <p id="selected-music-title" class="text-xs font-semibold truncate text-white"></p>
+                <p id="selected-music-artist" class="text-xs text-zinc-400 truncate"></p>
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button type="button" onclick="openMusicPickerModal()" class="px-2 py-1 rounded-lg bg-zinc-800 text-xs text-zinc-300 hover:text-white">Change</button>
+              <button type="button" onclick="clearSelectedMusic()" aria-label="Remove song" class="w-7 h-7 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white flex items-center justify-center text-xs">✕</button>
+            </div>
+          </div>
+        </div>
+
+        <input id="compose-location" type="text" placeholder="Location (optional)" class="w-full px-3 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none" />
+
+        <textarea id="compose-caption" rows="3" placeholder="Write a caption..." class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none"></textarea>
+      </div>
+
+      <button id="submit-post-btn" onclick="handleCreatePost()" class="w-full py-2.5 rounded-xl bg-sky-500 text-white text-xs font-semibold">
+        Share
+      </button>
+    </div>
+  </dialog>
+
+  <!-- Music Picker Modal (Search 100M+ Songs via Apple Music / iTunes Catalog) -->
+  <dialog id="music-picker-dialog" closedby="any" aria-labelledby="music-picker-title" onclose="stopPreviewAudio()" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
+    <div class="space-y-3.5">
+      <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+        <h3 id="music-picker-title" class="text-sm font-semibold">Add Music</h3>
+        <button type="button" onclick="document.getElementById('music-picker-dialog').close()" class="text-xs text-zinc-400 hover:text-white">
+          Done
+        </button>
+      </div>
+
+      <div class="relative">
+        <input
+          id="music-search-input"
+          type="text"
+          placeholder="Search any song or artist..."
+          oninput="handleMusicSearchInput(this.value)"
+          class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600"
+        />
+      </div>
+
+      <div id="music-results-list" class="max-h-72 overflow-y-auto divide-y divide-zinc-800/70 no-scrollbar">
+        <p class="py-8 text-center text-xs text-zinc-400">Loading songs...</p>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Edit Profile Modal (Light-Dismiss enabled via closedby="any") -->
+  <dialog id="edit-profile-dialog" closedby="any" aria-labelledby="edit-profile-title" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
+    <form onsubmit="handleSaveProfile(event)" class="space-y-4">
+      <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+        <h3 id="edit-profile-title" class="text-sm font-semibold">Edit Profile</h3>
+        <button type="button" onclick="document.getElementById('edit-profile-dialog').close()" class="text-xs text-zinc-400 hover:text-white">
+          Cancel
+        </button>
+      </div>
+
+      <div class="space-y-3">
+        <div>
+          <label for="edit-display-name" class="block text-xs text-zinc-400 mb-1">Name</label>
+          <input id="edit-display-name" type="text" required class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none" />
+        </div>
+        <div>
+          <label for="edit-handle" class="block text-xs text-zinc-400 mb-1">Username</label>
+          <input id="edit-handle" type="text" required class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none" />
+        </div>
+        <div>
+          <label for="edit-bio" class="block text-xs text-zinc-400 mb-1">Bio</label>
+          <textarea id="edit-bio" rows="3" placeholder="Write a short bio..." class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none"></textarea>
+        </div>
+      </div>
+
+      <button type="submit" class="w-full py-2.5 rounded-xl bg-sky-500 text-white text-xs font-semibold">
+        Save Changes
+      </button>
+    </form>
+  </dialog>
+
+  <!-- Change Password Modal (Light-Dismiss enabled via closedby="any") -->
+  <dialog id="change-password-dialog" closedby="any" aria-labelledby="change-password-title" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
+    <form onsubmit="handleChangePassword(event)" class="space-y-4">
+      <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+        <h3 id="change-password-title" class="text-sm font-semibold">Change Password</h3>
+        <button type="button" onclick="document.getElementById('change-password-dialog').close()" class="text-xs text-zinc-400 hover:text-white">
+          Cancel
+        </button>
+      </div>
+
+      <div class="space-y-2.5">
+        <input id="pw-current" type="password" required placeholder="Current password" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none" />
+        <input id="pw-new" type="password" required placeholder="New password (6+ characters)" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none" />
+      </div>
+
+      <button type="submit" class="w-full py-2.5 rounded-xl bg-sky-500 text-white text-xs font-semibold">
+        Update Password
+      </button>
+    </form>
+  </dialog>
+
+  <!-- Story Viewer Modal (Light-Dismiss enabled via closedby="any") -->
+  <dialog id="story-viewer-dialog" closedby="any" aria-labelledby="story-viewer-author" class="w-full max-w-sm rounded-2xl bg-black text-white border border-zinc-800 p-4 shadow-2xl">
+    <div class="space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <div id="story-viewer-initials" class="w-7 h-7 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-bold"></div>
+          <span id="story-viewer-author" class="text-xs font-semibold"></span>
+        </div>
+        <div class="flex items-center gap-3">
+          <button id="story-add-another-btn" onclick="document.getElementById('story-viewer-dialog').close();openComposeWithKind('video_story')" class="hidden text-xs text-sky-500 font-semibold">
+            + Add Story
+          </button>
+          <form method="dialog">
+            <button type="submit" class="text-xs text-zinc-400 hover:text-white">Close</button>
+          </form>
+        </div>
+      </div>
+
+      <div id="story-viewer-media-box" class="w-full aspect-[9/16] max-h-[480px] rounded-xl overflow-hidden bg-zinc-950 flex items-center justify-center"></div>
+
+      <p id="story-viewer-caption" class="text-xs text-zinc-200"></p>
+    </div>
+  </dialog>
+
+  <!-- Delete Account Confirmation Modal (Light-Dismiss enabled via closedby="any") -->
+  <dialog id="delete-account-dialog" closedby="any" aria-labelledby="delete-account-title" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
+    <div class="space-y-4">
+      <h3 id="delete-account-title" class="text-sm font-semibold text-rose-400">Delete Account</h3>
+      <p class="text-xs text-zinc-300 leading-relaxed">
+        Are you sure you want to permanently delete your account (<span id="delete-account-handle" class="font-semibold text-white"></span>)? This will remove your profile, photos, stories, connections, and messages.
+      </p>
+      <div class="grid grid-cols-2 gap-2 pt-1">
+        <form method="dialog">
+          <button type="submit" class="w-full py-2.5 rounded-xl bg-zinc-800 text-xs font-semibold text-white">
+            Cancel
+          </button>
+        </form>
+        <button onclick="confirmDeleteAccount()" class="w-full py-2.5 rounded-xl bg-rose-600 text-xs font-semibold text-white">
+          Delete Permanently
+        </button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Apply for Institution Account Modal (Light-Dismiss enabled via closedby="any") -->
+  <dialog id="institution-apply-dialog" closedby="any" aria-labelledby="inst-apply-title" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
+    <form onsubmit="handleInstitutionApplication(event)" class="space-y-4">
+      <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+        <h3 id="inst-apply-title" class="text-sm font-semibold">Apply for Institution Account</h3>
+        <button type="button" onclick="document.getElementById('institution-apply-dialog').close()" class="text-xs text-zinc-400 hover:text-white">
+          Cancel
+        </button>
+      </div>
+
+      <p class="text-xs text-zinc-400 leading-relaxed">
+        Institution accounts are reserved for verified schools, universities, and official alumni associations. Submit an application below for review.
+      </p>
+
+      <div class="space-y-2.5">
+        <input id="inst-name" type="text" required placeholder="Institution Name" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none" />
+        <input id="inst-domain" type="text" required placeholder="Official Domain (e.g. umich.edu)" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none" />
+        <input id="inst-email" type="email" required placeholder="Official Contact Email" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none" />
+        <textarea id="inst-notes" rows="2" placeholder="Role / Verification details (optional)" class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none"></textarea>
+      </div>
+
+      <div id="inst-apply-feedback" class="hidden text-xs text-emerald-400 font-medium">
+        Application submitted for review.
+      </div>
+
+      <button type="submit" class="w-full py-2.5 rounded-xl bg-sky-500 text-white text-xs font-semibold">
+        Submit Application
+      </button>
+    </form>
+  </dialog>
+
+  <script>
+    // Feature-detect native HTML switch control (per modern-web-guidance: switch)
+    if (!('switch' in HTMLInputElement.prototype)) {
+      import('input-switch-polyfill').catch(() => {});
+    }
+
+    const VERIFIED_SVG = `<svg class="w-3.5 h-3.5 text-sky-500 inline shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 2.8 3.6-.4.8 3.5 3.1 1.8-1.5 3.3 1.5 3.3-3.1 1.8-.8 3.5-3.6-.4L12 24l-2.4-2.8-3.6.4-.8-3.5-3.1-1.8 1.5-3.3-1.5-3.3 3.1-1.8.8-3.5 3.6.4L12 2zm-1.2 13.6l6-6-1.4-1.4-4.6 4.6-2.2-2.2-1.4 1.4 3.6 3.6z"/></svg>`;
+
+    const appState = {
+      token: localStorage.getItem('ivris_token') || '',
+      user: null,
+      isSignUp: false,
+      pendingConfirmEmail: '',
+      pendingConfirmCodePreview: '',
+      draftEmail: '',
+      draftPassword: '',
+      draftHandle: '',
+      draftName: '',
+      draftConfirmCode: '',
+      authError: '',
+      screen: 'main', // 'main' | 'search' | 'profile' | 'settings' | 'messages' | 'chat' | 'myPost'
+      searchTab: 'accounts', // 'accounts' | 'institutions' | 'requests'
+      searchQuery: '',
+      composeKind: 'photo_post',
+      feedPosts: [],
+      myPosts: [],
+      myStories: [],
+      stories: [],
+      seenPostIds: [],
+      allProfiles: [],
+      connections: [],
+      messages: [],
+      carouselIndexes: {},
+      activeChatPartner: null,
+      selectedMyPost: null,
+      selectedMusic: null,
+      musicResults: [],
+      playingPostId: null,
+      previewingTrackId: null
+    };
+
+    let activeAudioEl = null;
+    let musicSearchTimer = null;
+
+    async function apiFetch(path, options = {}) {
+      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+      if (appState.token) {
+        headers['Authorization'] = `Bearer ${appState.token}`;
+      }
+      const res = await fetch(path, { ...options, headers });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Request failed');
+      }
+      return data;
+    }
+
+    async function loadLiveData() {
+      if (!appState.token) {
+        appState.user = null;
+        render();
+        return;
+      }
+      try {
+        const data = await apiFetch('/api/state');
+        if (!data.user) {
+          appState.token = '';
+          localStorage.removeItem('ivris_token');
+          appState.user = null;
+          render();
+          return;
+        }
+        appState.user = data.user;
+        appState.connections = data.connections || [];
+        appState.seenPostIds = data.seenPostIds || [];
+        appState.feedPosts = data.feedPosts || [];
+        appState.myPosts = data.myPosts || [];
+        appState.myStories = data.myStories || [];
+        appState.stories = data.stories || [];
+        appState.allProfiles = data.allProfiles || [];
+        render();
+      } catch (_err) {
+        render();
+      }
+    }
+
+    function navigate(screen, subTab) {
+      const apply = () => {
+        appState.screen = screen;
+        if (subTab) appState.searchTab = subTab;
+        render();
+      };
+      if (!document.startViewTransition) {
+        apply();
+        document.getElementById('screen-heading')?.focus();
+        return;
+      }
+      const t = document.startViewTransition(apply);
+      t.finished.finally(() => document.getElementById('screen-heading')?.focus());
+    }
+
+    function syncAuthDrafts() {
+      const emailEl = document.getElementById('auth-email');
+      const pwEl = document.getElementById('auth-password');
+      const handleEl = document.getElementById('auth-handle');
+      const nameEl = document.getElementById('auth-name');
+      const codeEl = document.getElementById('auth-confirm-code');
+      if (emailEl) appState.draftEmail = emailEl.value;
+      if (pwEl) appState.draftPassword = pwEl.value;
+      if (handleEl) appState.draftHandle = handleEl.value;
+      if (nameEl) appState.draftName = nameEl.value;
+      if (codeEl) appState.draftConfirmCode = codeEl.value;
+    }
+
+    function toggleAuthMode() {
+      syncAuthDrafts();
+      appState.isSignUp = !appState.isSignUp;
+      appState.pendingConfirmEmail = '';
+      appState.authError = '';
+      render();
+    }
+
+    async function handleAuthSubmit(e) {
+      e.preventDefault();
+      syncAuthDrafts();
+      appState.authError = '';
+
+      try {
+        const endpoint = appState.isSignUp ? '/api/signup' : '/api/signin';
+        const res = await apiFetch(endpoint, {
+          method: 'POST',
+          body: JSON.stringify({
+            email: appState.draftEmail,
+            password: appState.draftPassword,
+            handle: appState.draftHandle,
+            display_name: appState.draftName
+          })
+        });
+
+        if (res.needs_confirmation) {
+          appState.pendingConfirmEmail = res.email;
+          appState.pendingConfirmCodePreview = res.confirmation_code_preview || '';
+          appState.draftConfirmCode = res.confirmation_code_preview || '';
+          render();
+          return;
+        }
+
+        appState.token = res.token;
+        localStorage.setItem('ivris_token', res.token);
+        await loadLiveData();
+      } catch (err) {
+        appState.authError = err.message;
+        render();
+      }
+    }
+
+    async function handleVerifyEmailSubmit(e) {
+      e.preventDefault();
+      syncAuthDrafts();
+      appState.authError = '';
+
+      try {
+        const res = await apiFetch('/api/verify-email', {
+          method: 'POST',
+          body: JSON.stringify({
+            email: appState.pendingConfirmEmail,
+            code: appState.draftConfirmCode
+          })
+        });
+        appState.pendingConfirmEmail = '';
+        appState.pendingConfirmCodePreview = '';
+        appState.draftConfirmCode = '';
+        appState.token = res.token;
+        localStorage.setItem('ivris_token', res.token);
+        await loadLiveData();
+      } catch (err) {
+        appState.authError = err.message;
+        render();
+      }
+    }
+
+    function signOut() {
+      appState.token = '';
+      appState.user = null;
+      appState.screen = 'main';
+      localStorage.removeItem('ivris_token');
+      render();
+    }
+
+    function openEditProfileModal() {
+      if (!appState.user) return;
+      document.getElementById('edit-display-name').value = appState.user.display_name || '';
+      document.getElementById('edit-handle').value = appState.user.handle || '';
+      document.getElementById('edit-bio').value = appState.user.bio || '';
+      document.getElementById('edit-profile-dialog').showModal();
+    }
+
+    async function handleSaveProfile(e) {
+      e.preventDefault();
+      try {
+        await apiFetch('/api/update-profile', {
+          method: 'POST',
+          body: JSON.stringify({
+            display_name: document.getElementById('edit-display-name').value,
+            handle: document.getElementById('edit-handle').value,
+            bio: document.getElementById('edit-bio').value
+          })
+        });
+        document.getElementById('edit-profile-dialog').close();
+        await loadLiveData();
+      } catch (err) {
+        alert(err.message || 'Could not update profile');
+      }
+    }
+
+    async function handleChangePassword(e) {
+      e.preventDefault();
+      try {
+        await apiFetch('/api/change-password', {
+          method: 'POST',
+          body: JSON.stringify({
+            current_password: document.getElementById('pw-current').value,
+            new_password: document.getElementById('pw-new').value
+          })
+        });
+        document.getElementById('pw-current').value = '';
+        document.getElementById('pw-new').value = '';
+        document.getElementById('change-password-dialog').close();
+        alert('Password updated.');
+      } catch (err) {
+        alert(err.message || 'Could not change password');
+      }
+    }
+
+    async function handleToggleSetting(key, checked) {
+      try {
+        const res = await apiFetch('/api/update-settings', {
+          method: 'POST',
+          body: JSON.stringify({
+            settings: { [key]: Boolean(checked) }
+          })
+        });
+        if (appState.user && res.settings) {
+          appState.user.settings = res.settings;
+        }
+      } catch (_err) {}
+    }
+
+    function openDeleteAccountModal() {
+      document.getElementById('delete-account-handle').textContent = '@' + (appState.user?.handle || '');
+      document.getElementById('delete-account-dialog').showModal();
+    }
+
+    async function confirmDeleteAccount() {
+      try {
+        await apiFetch('/api/delete-account', { method: 'POST' });
+        document.getElementById('delete-account-dialog').close();
+        signOut();
+      } catch (err) {
+        alert(err.message || 'Could not delete account');
+      }
+    }
+
+    async function handleInstitutionApplication(e) {
+      e.preventDefault();
+      const instName = document.getElementById('inst-name').value.trim();
+      const instDomain = document.getElementById('inst-domain').value.trim();
+      const instEmail = document.getElementById('inst-email').value.trim();
+      const instNotes = document.getElementById('inst-notes').value.trim();
+
+      await apiFetch('/api/institution-apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          institution_name: instName,
+          official_domain: instDomain,
+          contact_email: instEmail,
+          notes: instNotes
+        })
+      });
+
+      const feedback = document.getElementById('inst-apply-feedback');
+      feedback.classList.remove('hidden');
+      setTimeout(() => {
+        feedback.classList.add('hidden');
+        document.getElementById('inst-name').value = '';
+        document.getElementById('inst-domain').value = '';
+        document.getElementById('inst-email').value = '';
+        document.getElementById('inst-notes').value = '';
+        document.getElementById('institution-apply-dialog').close();
+      }, 1200);
+    }
+
+    function fileToDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function openComposeWithKind(kind) {
+      setComposeKind(kind);
+      document.getElementById('compose-dialog').showModal();
+    }
+
+    function setComposeKind(kind) {
+      appState.composeKind = kind;
+      const input = document.getElementById('media-file-input');
+      const hint = document.getElementById('compose-file-hint');
+      const preview = document.getElementById('compose-preview-strip');
+      const musicSection = document.getElementById('compose-music-section');
+      preview.classList.add('hidden');
+      preview.innerHTML = '';
+      if (input) input.value = '';
+
+      if (kind === 'photo_post') {
+        document.getElementById('tab-kind-photo').className = 'flex-1 pb-2.5 border-b-2 border-white text-white';
+        document.getElementById('tab-kind-story').className = 'flex-1 pb-2.5 border-b-2 border-transparent text-zinc-500';
+        input.setAttribute('accept', 'image/*');
+        input.setAttribute('multiple', 'multiple');
+        hint.textContent = 'Select up to 15 photos';
+        if (musicSection) musicSection.classList.remove('hidden');
+      } else {
+        document.getElementById('tab-kind-story').className = 'flex-1 pb-2.5 border-b-2 border-white text-white';
+        document.getElementById('tab-kind-photo').className = 'flex-1 pb-2.5 border-b-2 border-transparent text-zinc-500';
+        input.setAttribute('accept', 'image/*,video/*');
+        input.removeAttribute('multiple');
+        hint.textContent = 'Select a short video or photo for your 24h story';
+        if (musicSection) musicSection.classList.add('hidden');
+      }
+    }
+
+    function syncSelectedMusicUI() {
+      const triggerBtn = document.getElementById('add-music-trigger-btn');
+      const pill = document.getElementById('selected-music-pill');
+      if (!triggerBtn || !pill) return;
+      if (appState.selectedMusic) {
+        triggerBtn.classList.add('hidden');
+        pill.classList.remove('hidden');
+        document.getElementById('selected-music-art').src = appState.selectedMusic.artwork_url || '';
+        document.getElementById('selected-music-title').textContent = appState.selectedMusic.title || '';
+        document.getElementById('selected-music-artist').textContent = appState.selectedMusic.artist || '';
+      } else {
+        triggerBtn.classList.remove('hidden');
+        pill.classList.add('hidden');
+      }
+    }
+
+    function clearSelectedMusic() {
+      appState.selectedMusic = null;
+      syncSelectedMusicUI();
+    }
+
+    function stopPreviewAudio() {
+      if (activeAudioEl) {
+        activeAudioEl.pause();
+        activeAudioEl = null;
+      }
+      appState.previewingTrackId = null;
+      appState.playingPostId = null;
+    }
+
+    function openMusicPickerModal() {
+      const dialog = document.getElementById('music-picker-dialog');
+      dialog.showModal();
+      const input = document.getElementById('music-search-input');
+      if (appState.musicResults.length === 0) {
+        fetchMusicCatalog(input.value.trim() || 'Drake');
+      } else {
+        renderMusicResults();
+      }
+    }
+
+    function handleMusicSearchInput(val) {
+      if (musicSearchTimer) clearTimeout(musicSearchTimer);
+      musicSearchTimer = setTimeout(() => {
+        fetchMusicCatalog(val.trim() || 'top hits');
+      }, 260);
+    }
+
+    async function fetchMusicCatalog(query) {
+      const listEl = document.getElementById('music-results-list');
+      if (listEl) {
+        listEl.innerHTML = `<p class="py-8 text-center text-xs text-zinc-400">Searching songs...</p>`;
+      }
+      try {
+        const data = await apiFetch(`/api/music-search?q=${encodeURIComponent(query)}`);
+        appState.musicResults = data.tracks || [];
+      } catch (_err) {
+        try {
+          const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=song&limit=25`);
+          const raw = await res.json();
+          appState.musicResults = (raw.results || []).filter(r => r.previewUrl).map(r => ({
+            id: String(r.trackId),
+            title: r.trackName,
+            artist: r.artistName,
+            album: r.collectionName || '',
+            artwork_url: r.artworkUrl100 || '',
+            preview_url: r.previewUrl
+          }));
+        } catch (_e) {
+          appState.musicResults = [];
+        }
+      }
+      renderMusicResults();
+    }
+
+    function renderMusicResults() {
+      const listEl = document.getElementById('music-results-list');
+      if (!listEl) return;
+      if (appState.musicResults.length === 0) {
+        listEl.innerHTML = `<p class="py-8 text-center text-xs text-zinc-500">No songs found. Try another song or artist.</p>`;
+        return;
+      }
+      listEl.innerHTML = appState.musicResults.map((track, idx) => {
+        const isPreviewing = appState.previewingTrackId === track.id;
+        return `
+          <div class="py-2.5 flex items-center justify-between gap-2.5">
+            <button type="button" onclick="selectMusicTrack(${idx})" class="flex-1 flex items-center gap-3 min-w-0 text-left hover:opacity-85">
+              <img src="${escapeAttr(track.artwork_url)}" alt="" class="w-10 h-10 rounded-lg object-cover bg-zinc-800 shrink-0" />
+              <div class="min-w-0">
+                <p class="text-xs font-semibold text-white truncate">${escapeAttr(track.title)}</p>
+                <p class="text-xs text-zinc-400 truncate">${escapeAttr(track.artist)}</p>
+              </div>
+            </button>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onclick="togglePreviewTrack(${idx}, event)"
+                aria-label="${isPreviewing ? 'Pause preview' : 'Play preview'}"
+                class="w-8 h-8 rounded-full ${isPreviewing ? 'bg-sky-500 text-white' : 'bg-zinc-800 text-zinc-300'} flex items-center justify-center text-xs"
+              >
+                ${isPreviewing ? '❚❚' : '▶'}
+              </button>
+              <button
+                type="button"
+                onclick="selectMusicTrack(${idx})"
+                class="px-3 py-1.5 rounded-lg bg-sky-500 text-white text-xs font-semibold"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function togglePreviewTrack(idx, event) {
+      if (event) event.stopPropagation();
+      const track = appState.musicResults[idx];
+      if (!track || !track.preview_url) return;
+      if (appState.previewingTrackId === track.id && activeAudioEl) {
+        stopPreviewAudio();
+        renderMusicResults();
+        return;
+      }
+      stopPreviewAudio();
+      activeAudioEl = new Audio(track.preview_url);
+      appState.previewingTrackId = track.id;
+      activeAudioEl.onended = () => {
+        appState.previewingTrackId = null;
+        renderMusicResults();
+      };
+      activeAudioEl.play().catch(() => {});
+      renderMusicResults();
+    }
+
+    function selectMusicTrack(idx) {
+      const track = appState.musicResults[idx];
+      if (!track) return;
+      appState.selectedMusic = {
+        id: track.id,
+        title: track.title,
+        artist: track.artist,
+        artwork_url: track.artwork_url,
+        preview_url: track.preview_url
+      };
+      stopPreviewAudio();
+      syncSelectedMusicUI();
+      document.getElementById('music-picker-dialog').close();
+    }
+
+    function togglePostMusic(postId, previewUrl) {
+      if (!previewUrl) return;
+      const inlineAudio = document.getElementById(`post-audio-${postId}`);
+      if (inlineAudio) {
+        if (!inlineAudio.paused) {
+          inlineAudio.pause();
+          appState.playingPostId = null;
+        } else {
+          document.querySelectorAll('audio').forEach(a => {
+            if (a !== inlineAudio) a.pause();
+          });
+          if (activeAudioEl) activeAudioEl.pause();
+          inlineAudio.play().catch(() => {});
+          appState.playingPostId = postId;
+        }
+        render();
+        return;
+      }
+      if (appState.playingPostId === postId && activeAudioEl) {
+        stopPreviewAudio();
+        render();
+        return;
+      }
+      stopPreviewAudio();
+      activeAudioEl = new Audio(previewUrl);
+      appState.playingPostId = postId;
+      activeAudioEl.onended = () => {
+        appState.playingPostId = null;
+        render();
+      };
+      activeAudioEl.play().catch(() => {});
+      render();
+    }
+
+    async function handleFileSelectionPreview() {
+      const fileInput = document.getElementById('media-file-input');
+      const hint = document.getElementById('compose-file-hint');
+      const strip = document.getElementById('compose-preview-strip');
+      const files = Array.from(fileInput.files || []);
+
+      if (files.length === 0) {
+        strip.classList.add('hidden');
+        strip.innerHTML = '';
+        return;
+      }
+
+      if (appState.composeKind === 'photo_post' && files.length > 15) {
+        alert('You can select up to 15 photos per post.');
+      }
+
+      const selected = files.slice(0, 15);
+      hint.textContent = appState.composeKind === 'photo_post'
+        ? `${selected.length} / 15 photo${selected.length > 1 ? 's' : ''} selected`
+        : '1 story file selected';
+
+      const urls = await Promise.all(selected.map(f => fileToDataUrl(f)));
+      strip.innerHTML = urls.map((u, idx) => `
+        <div class="relative w-14 h-14 rounded-lg overflow-hidden bg-zinc-800 shrink-0 border border-zinc-700">
+          <img src="${u}" class="w-full h-full object-cover" />
+          <span class="absolute top-0.5 right-1 text-xs font-bold bg-black/70 px-1 rounded">${idx + 1}</span>
+        </div>
+      `).join('');
+      strip.classList.remove('hidden');
+    }
+
+    async function handleCreatePost() {
+      const fileInput = document.getElementById('media-file-input');
+      const caption = document.getElementById('compose-caption').value.trim();
+      const location = document.getElementById('compose-location').value.trim();
+      const btn = document.getElementById('submit-post-btn');
+
+      const files = Array.from(fileInput.files || []);
+      if (files.length === 0) {
+        alert('Please select at least one photo or video.');
+        return;
+      }
+      if (appState.composeKind === 'photo_post' && files.length > 15) {
+        alert('Maximum 15 photos allowed per post.');
+        return;
+      }
+
+      btn.textContent = 'Sharing...';
+      btn.disabled = true;
+
+      try {
+        const slice = appState.composeKind === 'photo_post' ? files.slice(0, 15) : files.slice(0, 1);
+        const dataUrls = await Promise.all(slice.map(f => fileToDataUrl(f)));
+
+        await apiFetch('/api/posts', {
+          method: 'POST',
+          body: JSON.stringify({
+            media_kind: appState.composeKind,
+            caption,
+            location_label: location,
+            music: appState.composeKind === 'photo_post' ? appState.selectedMusic : null,
+            data_urls: dataUrls
+          })
+        });
+
+        document.getElementById('compose-dialog').close();
+        fileInput.value = '';
+        document.getElementById('compose-preview-strip').classList.add('hidden');
+        document.getElementById('compose-caption').value = '';
+        document.getElementById('compose-location').value = '';
+        clearSelectedMusic();
+        await loadLiveData();
+      } catch (err) {
+        alert(err.message || 'Upload failed');
+      } finally {
+        btn.textContent = 'Share';
+        btn.disabled = false;
+      }
+    }
+
+    function handleYourStoryClick() {
+      if (appState.myStories.length > 0) {
+        openStoryViewer(appState.myStories[0], true);
+      } else {
+        openComposeWithKind('video_story');
+      }
+    }
+
+    function openStoryViewer(story, isOwn = false) {
+      document.getElementById('story-viewer-initials').textContent = (story.handle || 'U').slice(0, 2).toUpperCase();
+      document.getElementById('story-viewer-author').textContent = isOwn ? 'Your story' : story.handle;
+      document.getElementById('story-viewer-caption').textContent = story.caption || '';
+      const addBtn = document.getElementById('story-add-another-btn');
+      if (isOwn) addBtn.classList.remove('hidden');
+      else addBtn.classList.add('hidden');
+
+      const box = document.getElementById('story-viewer-media-box');
+      if (story.media_url.endsWith('.mp4')) {
+        box.innerHTML = `<video src="${story.media_url}" width="360" height="640" controls autoplay playsinline class="w-full h-full object-cover"></video>`;
+      } else {
+        box.innerHTML = `<img src="${story.media_url}" alt="Story" class="w-full h-full object-cover" />`;
+      }
+      document.getElementById('story-viewer-dialog').showModal();
+    }
+
+    function stepCarousel(postId, delta, total) {
+      const current = appState.carouselIndexes[postId] || 0;
+      const next = (current + delta + total) % total;
+      appState.carouselIndexes[postId] = next;
+      render();
+    }
+
+    async function toggleLike(postId) {
+      await apiFetch('/api/like', {
+        method: 'POST',
+        body: JSON.stringify({ post_id: postId })
+      });
+      await loadLiveData();
+    }
+
+    async function markPostSeen(postId) {
+      await apiFetch('/api/seen', {
+        method: 'POST',
+        body: JSON.stringify({ post_id: postId })
+      });
+      await loadLiveData();
+    }
+
+    async function handleConnectionClick(targetId) {
+      await apiFetch('/api/connect', {
+        method: 'POST',
+        body: JSON.stringify({ target_id: targetId })
+      });
+      await loadLiveData();
+    }
+
+    async function openChat(partnerId) {
+      const partner = appState.allProfiles.find(p => p.id === partnerId);
+      if (!partner) return;
+      appState.activeChatPartner = partner;
+      appState.screen = 'chat';
+      const data = await apiFetch(`/api/messages?partner_id=${encodeURIComponent(partnerId)}`);
+      appState.messages = data.messages || [];
+      render();
+    }
+
+    async function sendChatMessage() {
+      const input = document.getElementById('dm-input');
+      if (!input || !input.value.trim() || !appState.activeChatPartner) return;
+      const text = input.value.trim();
+      input.value = '';
+      await apiFetch('/api/messages', {
+        method: 'POST',
+        body: JSON.stringify({
+          recipient_id: appState.activeChatPartner.id,
+          message: text
+        })
+      });
+      await openChat(appState.activeChatPartner.id);
+    }
+
+    function openMyPostInsights(postId) {
+      const post = appState.myPosts.find(p => p.id === postId);
+      if (!post) return;
+      appState.selectedMyPost = post;
+      navigate('myPost');
+    }
+
+    function escapeAttr(str) {
+      return String(str || '').replace(/"/g, '&quot;');
+    }
+
+    function renderCarouselMedia(post) {
+      const urls = (post.media_urls && post.media_urls.length > 0) ? post.media_urls : [post.media_url];
+      const total = urls.length;
+      const idx = Math.min(appState.carouselIndexes[post.id] || 0, total - 1);
+      const currentUrl = urls[idx];
+      const hasMusic = post.music && post.music.preview_url;
+      const isPlaying = appState.playingPostId === post.id;
+
+      return `
+        <div class="relative w-full aspect-[4/5] bg-zinc-900 overflow-hidden">
+          <img src="${currentUrl}" alt="Post photo" class="w-full h-full object-cover" />
+          ${total > 1 ? `
+            <div class="absolute top-3 right-3 px-2.5 py-0.5 rounded-full bg-black/65 text-white text-xs font-medium">
+              ${idx + 1}/${total}
+            </div>
+            <button onclick="stepCarousel('${post.id}', -1, ${total})" aria-label="Previous photo" class="absolute left-2.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/55 text-white flex items-center justify-center text-sm font-bold">
+              ‹
+            </button>
+            <button onclick="stepCarousel('${post.id}', 1, ${total})" aria-label="Next photo" class="absolute right-2.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/55 text-white flex items-center justify-center text-sm font-bold">
+              ›
+            </button>
+          ` : ''}
+          ${hasMusic ? `
+            <button
+              type="button"
+              onclick="togglePostMusic('${post.id}', '${escapeAttr(post.music.preview_url)}')"
+              aria-label="${isPlaying ? 'Pause song' : 'Play song'}"
+              class="absolute bottom-3 right-3 w-8 h-8 rounded-full bg-black/75 backdrop-blur text-white flex items-center justify-center shadow-lg"
+            >
+              ${isPlaying ? `
+                <svg class="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"/>
+                </svg>
+              ` : `
+                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
+                </svg>
+              `}
+            </button>
+          ` : ''}
+        </div>
+        ${hasMusic ? `
+          <div class="px-3.5 pt-2">
+            <audio
+              id="post-audio-${post.id}"
+              controls
+              loading="lazy"
+              preload="none"
+              src="${escapeAttr(post.music.preview_url)}"
+              onplay="appState.playingPostId='${post.id}'"
+              onpause="if(appState.playingPostId==='${post.id}')appState.playingPostId=null"
+              onended="if(appState.playingPostId==='${post.id}'){appState.playingPostId=null;render();}"
+              class="w-full h-8"
+            ></audio>
+          </div>
+        ` : ''}
+      `;
+    }
+
+    function render() {
+      const root = document.getElementById('app-root');
+
+      // 1A. Email Confirmation Code Step
+      if (!appState.user && appState.pendingConfirmEmail) {
+        root.innerHTML = `
+          <div class="my-auto px-7 py-12 space-y-5">
+            <div class="text-center space-y-1.5">
+              <h1 id="screen-heading" tabindex="-1" class="text-2xl font-bold tracking-tight">Confirm your email</h1>
+              <p class="text-xs text-zinc-400">
+                Enter the 6-digit confirmation code for <span class="text-white font-medium">${escapeAttr(appState.pendingConfirmEmail)}</span>
+              </p>
+            </div>
+
+            ${appState.pendingConfirmCodePreview ? `
+              <div class="p-3 rounded-xl bg-zinc-900 border border-zinc-800 text-center space-y-1">
+                <span class="text-xs text-zinc-400 block">Your confirmation code:</span>
+                <span class="text-base font-bold tracking-widest text-sky-400">${appState.pendingConfirmCodePreview}</span>
+              </div>
+            ` : ''}
+
+            ${appState.authError ? `
+              <div class="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400 text-xs">
+                ${appState.authError}
+              </div>
+            ` : ''}
+
+            <form onsubmit="handleVerifyEmailSubmit(event)" class="space-y-3">
+              <input id="auth-confirm-code" type="text" required maxlength="6" value="${escapeAttr(appState.draftConfirmCode)}" placeholder="6-digit code" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-center tracking-widest text-sm font-semibold text-white focus:outline-none focus:border-zinc-600" />
+              <button type="submit" class="w-full py-2.5 rounded-xl bg-sky-500 text-white text-xs font-semibold">
+                Confirm & Sign In
+              </button>
+            </form>
+
+            <div class="text-center">
+              <button type="button" onclick="appState.pendingConfirmEmail='';render()" class="text-xs text-zinc-400">
+                Back
+              </button>
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      // 1B. Sign In / Sign Up Screen ("Apply for an Institution Account" appears ONLY on Sign Up)
+      if (!appState.user) {
+        root.innerHTML = `
+          <div class="my-auto px-7 py-12 space-y-6">
+            <div class="text-center space-y-1.5">
+              <h1 id="screen-heading" tabindex="-1" class="text-3xl font-bold tracking-tight" style="font-family: Georgia, serif;">Ivris</h1>
+            </div>
+
+            ${appState.authError ? `
+              <div class="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400 text-xs">
+                ${appState.authError}
+              </div>
+            ` : ''}
+
+            <form onsubmit="handleAuthSubmit(event)" class="space-y-3">
+              <input id="auth-email" type="text" required value="${escapeAttr(appState.draftEmail)}" placeholder="${appState.isSignUp ? 'Email address' : 'Email or username'}" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+              <input id="auth-password" type="password" required value="${escapeAttr(appState.draftPassword)}" placeholder="Password" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+
+              ${appState.isSignUp ? `
+                <input id="auth-handle" type="text" required value="${escapeAttr(appState.draftHandle)}" placeholder="Username" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+                <input id="auth-name" type="text" required value="${escapeAttr(appState.draftName)}" placeholder="Full Name" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+              ` : ''}
+
+              <button type="submit" class="w-full py-2.5 rounded-xl bg-sky-500 text-white text-xs font-semibold">
+                ${appState.isSignUp ? 'Sign Up' : 'Sign In'}
+              </button>
+            </form>
+
+            <div class="text-center space-y-3 pt-2">
+              <button type="button" onclick="toggleAuthMode()" class="block w-full text-xs text-sky-500 font-medium">
+                ${appState.isSignUp ? 'Already have an account? Sign in' : 'Don’t have an account? Sign up'}
+              </button>
+
+              ${appState.isSignUp ? `
+                <button type="button" onclick="document.getElementById('institution-apply-dialog').showModal()" class="text-xs text-zinc-500 hover:text-zinc-300 transition">
+                  Apply for an Institution Account
+                </button>
+              ` : ''}
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      // 2. Signed In View
+      const uid = appState.user.id;
+      const incomingReqs = appState.connections.filter(c => c.addressee_id === uid && c.status === 'pending').length;
+
+      let headerHtml = '';
+      if (appState.screen === 'settings') {
+        headerHtml = `
+          <header class="px-4 py-3 border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+            <button onclick="navigate('profile')" class="text-xs font-semibold flex items-center gap-1">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+              <span>Profile</span>
+            </button>
+            <h1 id="screen-heading" tabindex="-1" class="text-sm font-bold focus:outline-none">Settings and activity</h1>
+            <div class="w-12"></div>
+          </header>
+        `;
+      } else if (appState.screen === 'profile') {
+        headerHtml = `
+          <header class="px-4 py-3 border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+            <h1 id="screen-heading" tabindex="-1" class="text-base font-bold focus:outline-none">${escapeAttr(appState.user.handle)}</h1>
+            <div class="flex items-center gap-5">
+              <button onclick="openComposeWithKind('photo_post')" aria-label="Create post">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><path stroke-linecap="round" d="M12 8v8M8 12h8"/></svg>
+              </button>
+              <button onclick="navigate('settings')" aria-label="Open Settings">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/></svg>
+              </button>
+            </div>
+          </header>
+        `;
+      } else if (['messages', 'chat', 'myPost'].includes(appState.screen)) {
+        const backTarget = appState.screen === 'myPost' ? 'profile' : (appState.screen === 'chat' ? 'messages' : 'main');
+        headerHtml = `
+          <header class="px-4 py-3 border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+            <button onclick="navigate('${backTarget}')" class="text-xs font-semibold flex items-center gap-1">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+              <span>Back</span>
+            </button>
+            <h1 id="screen-heading" tabindex="-1" class="text-sm font-bold focus:outline-none">
+              ${appState.screen === 'myPost' ? 'Post' : (appState.screen === 'chat' ? escapeAttr(appState.activeChatPartner?.display_name || 'Chat') : 'Messages')}
+            </h1>
+            <div class="w-10"></div>
+          </header>
+        `;
+      } else {
+        headerHtml = `
+          <header class="px-4 py-3 border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+            <h1 id="screen-heading" tabindex="-1" class="text-xl font-bold tracking-tight focus:outline-none" style="font-family: Georgia, serif;">Ivris</h1>
+            <div class="flex items-center gap-5">
+              <button onclick="navigate('search', 'requests')" aria-label="Requests" class="relative">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
+                </svg>
+                ${incomingReqs > 0 ? `<span class="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#ff3040]"></span>` : ''}
+              </button>
+              <button onclick="navigate('messages')" aria-label="Direct Messages">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                </svg>
+              </button>
+            </div>
+          </header>
+        `;
+      }
+
+      let bodyHtml = '';
+
+      if (appState.screen === 'main') {
+        const autoHideSeen = appState.user.settings?.auto_hide_seen !== false;
+        const unseen = autoHideSeen
+          ? appState.feedPosts.filter(p => !appState.seenPostIds.includes(p.id))
+          : appState.feedPosts;
+        const hasMyStory = appState.myStories.length > 0;
+        const myInitials = (appState.user.handle || 'U').slice(0, 2).toUpperCase();
+
+        // Always-visible "Your story" bubble on the Home screen
+        const storiesBar = `
+          <div class="px-3.5 py-2.5 border-b border-zinc-900 flex gap-4 overflow-x-auto no-scrollbar">
+            <button onclick="handleYourStoryClick()" class="flex flex-col items-center gap-1 shrink-0">
+              <div class="relative p-[2px] rounded-full ${hasMyStory ? 'ig-ring-friend' : 'bg-zinc-800'}">
+                <div class="w-14 h-14 rounded-full bg-zinc-900 border-2 border-black flex items-center justify-center text-xs font-bold">
+                  ${myInitials}
+                </div>
+                <span onclick="event.stopPropagation();openComposeWithKind('video_story')" class="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-sky-500 text-white border-2 border-black flex items-center justify-center text-xs font-bold leading-none">+</span>
+              </div>
+              <span class="text-xs text-zinc-300 max-w-[64px] truncate">Your story</span>
+            </button>
+
+            ${appState.stories.map((st, idx) => `
+              <button onclick="openStoryViewer(appState.stories[${idx}], false)" class="flex flex-col items-center gap-1 shrink-0">
+                <div class="p-[2px] rounded-full ${st.is_verified_institution ? 'ig-ring-institution' : 'ig-ring-friend'}">
+                  <div class="w-14 h-14 rounded-full bg-zinc-900 border-2 border-black flex items-center justify-center text-xs font-bold">
+                    ${(st.handle || 'U').slice(0, 2).toUpperCase()}
+                  </div>
+                </div>
+                <span class="text-xs max-w-[64px] truncate">${st.handle || 'user'}</span>
+              </button>
+            `).join('')}
+          </div>
+        `;
+
+        const feedCards = unseen.length === 0 ? `
+          <div class="px-8 py-20 text-center space-y-3">
+            <p class="text-sm font-semibold">You’re all caught up</p>
+            <p class="text-xs text-zinc-400 leading-relaxed">
+              Connect with friends or follow institutions in Search to see new posts.
+            </p>
+            <button onclick="navigate('search', 'accounts')" class="px-5 py-2 rounded-lg bg-sky-500 text-white text-xs font-semibold">
+              Search
+            </button>
+          </div>
+        ` : unseen.map(post => {
+          const urls = (post.media_urls && post.media_urls.length > 0) ? post.media_urls : [post.media_url];
+          const curIdx = Math.min(appState.carouselIndexes[post.id] || 0, urls.length - 1);
+
+          return `
+            <article class="border-b border-zinc-900 pb-3">
+              <div class="px-3.5 py-2.5 flex items-center justify-between">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-1">
+                    <span class="text-xs font-semibold">${post.handle}</span>
+                    ${post.is_verified_institution ? VERIFIED_SVG : ''}
+                  </div>
+                  ${post.music && post.music.title ? `
+                    <button type="button" onclick="togglePostMusic('${post.id}', '${escapeAttr(post.music.preview_url)}')" class="flex items-center gap-1 text-xs text-zinc-300 hover:text-white truncate max-w-[260px]">
+                      <svg class="w-3 h-3 text-sky-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
+                      </svg>
+                      <span class="truncate">${escapeAttr(post.music.artist)} · ${escapeAttr(post.music.title)}</span>
+                    </button>
+                  ` : (post.location_label ? `<p class="text-xs text-zinc-400">${post.location_label}</p>` : '')}
+                </div>
+                <button onclick="markPostSeen('${post.id}')" class="text-xs text-zinc-400 shrink-0">Done</button>
+              </div>
+
+              ${renderCarouselMedia(post)}
+
+              <!-- Action Bar: Like counts are never shown on other people's posts -->
+              <div class="px-3.5 pt-2.5 pb-1.5 flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                  <button onclick="toggleLike('${post.id}')">
+                    <svg class="w-6 h-6 ${post.likedByMe ? 'text-[#ff3040]' : ''}" fill="${post.likedByMe ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
+                    </svg>
+                  </button>
+                  <button onclick="openChat('${post.author_id}')">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                    </svg>
+                  </button>
+                </div>
+
+                ${urls.length > 1 ? `
+                  <div class="flex gap-1">
+                    ${urls.map((_, dotIdx) => `
+                      <span class="w-1.5 h-1.5 rounded-full ${dotIdx === curIdx ? 'bg-sky-500' : 'bg-zinc-700'}"></span>
+                    `).join('')}
+                  </div>
+                ` : '<div></div>'}
+              </div>
+
+              <div class="px-3.5">
+                <p class="text-xs leading-relaxed">
+                  <span class="font-semibold mr-1.5">${post.handle}</span>${post.caption || ''}
+                </p>
+              </div>
+            </article>
+          `;
+        }).join('');
+
+        bodyHtml = `${storiesBar}${feedCards}`;
+      } else if (appState.screen === 'search') {
+        const filtered = appState.allProfiles.filter(p => {
+          const q = appState.searchQuery.toLowerCase();
+          const matches = !q || p.handle.toLowerCase().includes(q) || p.display_name.toLowerCase().includes(q);
+          if (!matches) return false;
+          if (appState.searchTab === 'institutions') return p.account_type === 'institution';
+          if (appState.searchTab === 'requests') {
+            return appState.connections.some(c => c.requester_id === p.id && c.addressee_id === uid && c.status === 'pending');
+          }
+          return p.account_type === 'personal';
+        });
+
+        bodyHtml = `
+          <div>
+            <div class="px-4 pt-3 pb-2">
+              <input
+                type="text"
+                value="${escapeAttr(appState.searchQuery)}"
+                oninput="appState.searchQuery=this.value;render()"
+                placeholder="Search"
+                class="w-full px-3.5 py-2 rounded-xl bg-zinc-900 text-xs text-white focus:outline-none"
+              />
+            </div>
+
+            <div class="grid grid-cols-3 border-b border-zinc-900 text-xs font-semibold text-center">
+              <button onclick="navigate('search', 'accounts')" class="py-2.5 border-b-[1.5px] whitespace-nowrap ${appState.searchTab === 'accounts' ? 'border-white text-white' : 'border-transparent text-zinc-500'}">
+                Accounts
+              </button>
+              <button onclick="navigate('search', 'institutions')" class="py-2.5 border-b-[1.5px] whitespace-nowrap ${appState.searchTab === 'institutions' ? 'border-white text-white' : 'border-transparent text-zinc-500'}">
+                Institutions
+              </button>
+              <button onclick="navigate('search', 'requests')" class="py-2.5 border-b-[1.5px] whitespace-nowrap ${appState.searchTab === 'requests' ? 'border-white text-white' : 'border-transparent text-zinc-500'}">
+                Requests${incomingReqs > 0 ? ` (${incomingReqs})` : ''}
+              </button>
+            </div>
+
+            <div class="divide-y divide-zinc-900">
+              ${filtered.length === 0 ? `
+                <p class="p-8 text-center text-xs text-zinc-500">No accounts found.</p>
+              ` : filtered.map(item => {
+                const conn = appState.connections.find(c =>
+                  (c.requester_id === uid && c.addressee_id === item.id) ||
+                  (c.requester_id === item.id && c.addressee_id === uid)
+                );
+                const label = !conn
+                  ? (item.account_type === 'institution' ? 'Follow' : 'Add')
+                  : conn.status === 'accepted'
+                  ? 'Connected'
+                  : conn.addressee_id === uid
+                  ? 'Accept'
+                  : 'Requested';
+
+                return `
+                  <div class="py-3 px-4 flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-3 min-w-0">
+                      <div class="w-11 h-11 rounded-full bg-zinc-900 flex items-center justify-center font-semibold text-xs shrink-0">
+                        ${item.handle.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div class="min-w-0">
+                        <div class="flex items-center gap-1">
+                          <span class="text-xs font-semibold truncate">${item.handle}</span>
+                          ${item.is_verified_institution ? VERIFIED_SVG : ''}
+                        </div>
+                        <p class="text-xs text-zinc-400 truncate">${item.display_name}</p>
+                      </div>
+                    </div>
+                    <button onclick="handleConnectionClick('${item.id}')" class="h-8 px-4 rounded-lg bg-sky-500 text-white text-xs font-semibold whitespace-nowrap shrink-0">
+                      ${label}
+                    </button>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      } else if (appState.screen === 'messages') {
+        const acceptedFriends = appState.allProfiles.filter(p =>
+          appState.connections.some(c =>
+            c.status === 'accepted' &&
+            ((c.requester_id === uid && c.addressee_id === p.id) ||
+             (c.requester_id === p.id && c.addressee_id === uid))
+          )
+        );
+        bodyHtml = `
+          <div class="divide-y divide-zinc-900">
+            ${acceptedFriends.length === 0 ? `
+              <p class="p-8 text-center text-xs text-zinc-500">Connect with friends to message them.</p>
+            ` : acceptedFriends.map(f => `
+              <button onclick="openChat('${f.id}')" class="w-full px-4 py-3 flex items-center justify-between text-left">
+                <div>
+                  <p class="text-xs font-semibold">${f.display_name}</p>
+                  <p class="text-xs text-zinc-400">@${f.handle}</p>
+                </div>
+                <span class="text-xs text-sky-500 font-semibold">Message</span>
+              </button>
+            `).join('')}
+          </div>
+        `;
+      } else if (appState.screen === 'chat' && appState.activeChatPartner) {
+        bodyHtml = `
+          <div class="p-4 flex flex-col justify-between min-h-[75vh]">
+            <div class="space-y-2.5">
+              ${appState.messages.map(m => `
+                <div class="flex ${m.sender_id === uid ? 'justify-end' : 'justify-start'}">
+                  <div class="max-w-[75%] px-3.5 py-2 rounded-2xl text-xs ${m.sender_id === uid ? 'bg-sky-500 text-white' : 'bg-zinc-900 text-white'}">
+                    ${m.message}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+            <div class="pt-3 flex items-center gap-2">
+              <input id="dm-input" type="text" placeholder="Message..." onkeydown="if(event.key==='Enter')sendChatMessage()" class="flex-1 px-4 py-2.5 rounded-full bg-zinc-900 text-xs text-white focus:outline-none" />
+              <button onclick="sendChatMessage()" class="px-3 py-2 text-xs font-bold text-sky-500">Send</button>
+            </div>
+          </div>
+        `;
+      } else if (appState.screen === 'profile') {
+        const friendsCount = appState.connections.filter(c => c.status === 'accepted').length;
+        bodyHtml = `
+          <div class="space-y-4 pt-4">
+            <div class="px-4 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center text-base font-bold">
+                  ${(appState.user.handle || 'U').slice(0, 2).toUpperCase()}
+                </div>
+                <div class="flex items-center gap-6 pr-4 text-center">
+                  <div>
+                    <div class="text-sm font-bold">${appState.myPosts.length}</div>
+                    <div class="text-xs text-zinc-400">posts</div>
+                  </div>
+                  <div>
+                    <div class="text-sm font-bold">${friendsCount}</div>
+                    <div class="text-xs text-zinc-400">friends</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="space-y-0.5">
+                <p class="text-xs font-bold">${appState.user.display_name}</p>
+                ${appState.user.bio ? `<p class="text-xs text-zinc-300 leading-relaxed">${appState.user.bio}</p>` : ''}
+              </div>
+
+              <!-- Clean Instagram Profile Buttons (No Delete or Sign Out buttons cluttering Profile) -->
+              <div class="grid grid-cols-2 gap-2">
+                <button onclick="openEditProfileModal()" class="h-8 rounded-lg bg-zinc-900 text-xs font-semibold">
+                  Edit profile
+                </button>
+                <button onclick="navigate('settings')" class="h-8 rounded-lg bg-zinc-900 text-xs font-semibold">
+                  Settings
+                </button>
+              </div>
+            </div>
+
+            <div class="border-t border-zinc-900 pt-0.5 grid grid-cols-3 gap-0.5">
+              ${appState.myPosts.map(p => {
+                const count = (p.media_urls && p.media_urls.length) || 1;
+                return `
+                  <button onclick="openMyPostInsights('${p.id}')" class="aspect-square bg-zinc-900 overflow-hidden relative">
+                    <img src="${p.media_url}" alt="Your post" class="w-full h-full object-cover" />
+                    ${count > 1 ? `
+                      <span class="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/65 text-xs font-semibold text-white">
+                        1/${count}
+                      </span>
+                    ` : ''}
+                  </button>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      } else if (appState.screen === 'settings') {
+        const s = appState.user.settings || {};
+        const initials = (appState.user.handle || 'U').slice(0, 2).toUpperCase();
+        bodyHtml = `
+          <div class="px-4 py-4 space-y-5 pb-12">
+            <!-- Profile Quick Card -->
+            <button onclick="openEditProfileModal()" class="w-full p-3.5 rounded-2xl bg-zinc-900/70 border border-zinc-800/80 flex items-center justify-between text-left hover:bg-zinc-900 transition">
+              <div class="flex items-center gap-3 min-w-0">
+                <div class="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-bold shrink-0">
+                  ${initials}
+                </div>
+                <div class="min-w-0">
+                  <p class="text-sm font-semibold truncate">${escapeAttr(appState.user.display_name)}</p>
+                  <p class="text-xs text-zinc-400 truncate">@${escapeAttr(appState.user.handle)} · Edit profile</p>
+                </div>
+              </div>
+              <svg class="w-4 h-4 text-zinc-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+              </svg>
+            </button>
+
+            <!-- 1. Privacy & Feed -->
+            <div class="space-y-1.5">
+              <h2 class="px-1 text-xs font-semibold text-zinc-400">Privacy & feed</h2>
+              <div class="rounded-2xl bg-zinc-900/70 border border-zinc-800/80 divide-y divide-zinc-800/70 overflow-hidden">
+                <label class="px-4 py-3.5 flex items-center justify-between gap-3.5 cursor-pointer">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <svg class="w-5 h-5 text-zinc-300 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                    </svg>
+                    <div class="min-w-0">
+                      <span class="text-xs font-semibold block">Read receipts</span>
+                      <span class="text-xs text-zinc-400 block">Show friends when you’ve seen their messages</span>
+                    </div>
+                  </div>
+                  <input type="checkbox" switch class="ivris-switch" ${s.read_receipts !== false ? 'checked' : ''} onchange="handleToggleSetting('read_receipts', this.checked)" />
+                </label>
+
+                <label class="px-4 py-3.5 flex items-center justify-between gap-3.5 cursor-pointer">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <svg class="w-5 h-5 text-zinc-300 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <div class="min-w-0">
+                      <span class="text-xs font-semibold block">Story replies</span>
+                      <span class="text-xs text-zinc-400 block">Allow mutual friends to reply to your stories</span>
+                    </div>
+                  </div>
+                  <input type="checkbox" switch class="ivris-switch" ${s.story_replies !== false ? 'checked' : ''} onchange="handleToggleSetting('story_replies', this.checked)" />
+                </label>
+
+                <label class="px-4 py-3.5 flex items-center justify-between gap-3.5 cursor-pointer">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <svg class="w-5 h-5 text-zinc-300 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <div class="min-w-0">
+                      <span class="text-xs font-semibold block">Hide seen posts</span>
+                      <span class="text-xs text-zinc-400 block">Remove posts from Home once marked Done</span>
+                    </div>
+                  </div>
+                  <input type="checkbox" switch class="ivris-switch" ${s.auto_hide_seen !== false ? 'checked' : ''} onchange="handleToggleSetting('auto_hide_seen', this.checked)" />
+                </label>
+              </div>
+            </div>
+
+            <!-- 2. Notifications -->
+            <div class="space-y-1.5">
+              <h2 class="px-1 text-xs font-semibold text-zinc-400">Notifications</h2>
+              <div class="rounded-2xl bg-zinc-900/70 border border-zinc-800/80 divide-y divide-zinc-800/70 overflow-hidden">
+                <label class="px-4 py-3.5 flex items-center justify-between gap-3.5 cursor-pointer">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <svg class="w-5 h-5 text-zinc-300 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                    </svg>
+                    <div class="min-w-0">
+                      <span class="text-xs font-semibold block">Quiet mode</span>
+                      <span class="text-xs text-zinc-400 block">Mute push notifications for mindful browsing</span>
+                    </div>
+                  </div>
+                  <input type="checkbox" switch class="ivris-switch" ${s.quiet_mode ? 'checked' : ''} onchange="handleToggleSetting('quiet_mode', this.checked)" />
+                </label>
+
+                <label class="px-4 py-3.5 flex items-center justify-between gap-3.5 cursor-pointer">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <svg class="w-5 h-5 text-zinc-300 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
+                    </svg>
+                    <div class="min-w-0">
+                      <span class="text-xs font-semibold block">Connection requests</span>
+                      <span class="text-xs text-zinc-400 block">Alert when someone asks to connect</span>
+                    </div>
+                  </div>
+                  <input type="checkbox" switch class="ivris-switch" ${s.notify_requests !== false ? 'checked' : ''} onchange="handleToggleSetting('notify_requests', this.checked)" />
+                </label>
+
+                <label class="px-4 py-3.5 flex items-center justify-between gap-3.5 cursor-pointer">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <svg class="w-5 h-5 text-zinc-300 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                    </svg>
+                    <div class="min-w-0">
+                      <span class="text-xs font-semibold block">Direct messages</span>
+                      <span class="text-xs text-zinc-400 block">Alert when a friend sends a message</span>
+                    </div>
+                  </div>
+                  <input type="checkbox" switch class="ivris-switch" ${s.notify_messages !== false ? 'checked' : ''} onchange="handleToggleSetting('notify_messages', this.checked)" />
+                </label>
+              </div>
+            </div>
+
+            <!-- 3. Account -->
+            <div class="space-y-1.5">
+              <h2 class="px-1 text-xs font-semibold text-zinc-400">Account</h2>
+              <div class="rounded-2xl bg-zinc-900/70 border border-zinc-800/80 divide-y divide-zinc-800/70 overflow-hidden">
+                <div class="px-4 py-3.5 flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <svg class="w-5 h-5 text-zinc-300 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                    </svg>
+                    <span class="text-xs font-semibold">Confirmed email</span>
+                  </div>
+                  <span class="text-xs text-zinc-400 truncate max-w-[180px]">${escapeAttr(appState.user.email)}</span>
+                </div>
+
+                <button onclick="document.getElementById('change-password-dialog').showModal()" class="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-zinc-900 transition">
+                  <div class="flex items-center gap-3">
+                    <svg class="w-5 h-5 text-zinc-300 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                    </svg>
+                    <span class="text-xs font-semibold">Password & security</span>
+                  </div>
+                  <svg class="w-4 h-4 text-zinc-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+                  </svg>
+                </button>
+
+                <button onclick="signOut()" class="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-zinc-900 transition">
+                  <div class="flex items-center gap-3">
+                    <svg class="w-5 h-5 text-sky-400 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                    </svg>
+                    <span class="text-xs font-semibold text-sky-400">Log out</span>
+                  </div>
+                </button>
+
+                <button onclick="openDeleteAccountModal()" class="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-zinc-900 transition">
+                  <div class="flex items-center gap-3">
+                    <svg class="w-5 h-5 text-rose-500 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                    </svg>
+                    <span class="text-xs font-semibold text-rose-500">Delete account</span>
+                  </div>
+                  <svg class="w-4 h-4 text-rose-500/70 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (appState.screen === 'myPost' && appState.selectedMyPost) {
+        const p = appState.selectedMyPost;
+        bodyHtml = `
+          <article class="pb-6">
+            ${p.music && p.music.title ? `
+              <div class="px-4 py-2.5 flex items-center gap-2 border-b border-zinc-900">
+                <svg class="w-3.5 h-3.5 text-sky-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
+                </svg>
+                <span class="text-xs text-zinc-200 truncate">${escapeAttr(p.music.artist)} · ${escapeAttr(p.music.title)}</span>
+              </div>
+            ` : ''}
+            ${renderCarouselMedia(p)}
+            <div class="px-4 pt-3 space-y-2">
+              <div class="p-2.5 rounded-xl bg-zinc-900 flex items-center justify-between">
+                <span class="text-xs font-semibold">${p.ownerOnlyLikesCount || 0} likes</span>
+                <span class="text-xs text-zinc-400">Visible only to you</span>
+              </div>
+              <p class="text-xs"><span class="font-semibold mr-1.5">${appState.user.handle}</span>${p.caption || ''}</p>
+            </div>
+          </article>
+        `;
+      }
+
+      const footerNav = `
+        <nav aria-label="Bottom Navigation" class="px-8 py-3 border-t border-zinc-900 flex items-center justify-between sticky bottom-0 bg-black z-20">
+          <button onclick="navigate('main')" aria-label="Home" class="${appState.screen === 'main' ? 'opacity-100' : 'opacity-45'}">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1v-9.5z"/></svg>
+          </button>
+          <button onclick="navigate('search')" aria-label="Search" class="${appState.screen === 'search' ? 'opacity-100' : 'opacity-45'}">
+            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7.5"/><path stroke-linecap="round" d="M20 20l-3.8-3.8"/></svg>
+          </button>
+          <button onclick="openComposeWithKind('photo_post')" aria-label="New Share" class="opacity-75 hover:opacity-100">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><path stroke-linecap="round" d="M12 8v8M8 12h8"/></svg>
+          </button>
+          <button onclick="navigate('profile')" aria-label="Profile" class="${['profile', 'settings', 'myPost'].includes(appState.screen) ? 'opacity-100' : 'opacity-45'}">
+            <div class="w-6 h-6 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-bold">
+              ${(appState.user.handle || 'U').slice(0, 1).toUpperCase()}
+            </div>
+          </button>
+        </nav>
+      `;
+
+      root.innerHTML = `${headerHtml}<main class="flex-1">${bodyHtml}</main>${footerNav}`;
+      observeLazyMedia();
+    }
+
+    // Fallback for browsers without native <audio loading="lazy"> / <video loading="lazy"> (per modern-web-guidance: lazy-load-video-and-audio)
+    function observeLazyMedia() {
+      const supportsLazyMedia = Object.hasOwn(HTMLMediaElement.prototype, 'loading');
+      if (supportsLazyMedia) return;
+      const lazyMediaElements = document.querySelectorAll('video[loading="lazy"], audio[loading="lazy"][controls]');
+      if (!lazyMediaElements.length) return;
+      const mediaObserver = new IntersectionObserver((entries, observer) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const media = entry.target;
+          if (media.dataset.preload) {
+            media.preload = media.dataset.preload;
+            delete media.dataset.preload;
+          }
+          observer.unobserve(media);
+        }
+      }, { rootMargin: '200px 0px' });
+
+      for (const media of lazyMediaElements) {
+        if (media.hasAttribute('preload') && media.getAttribute('preload') !== 'none') {
+          media.dataset.preload = media.getAttribute('preload');
+        }
+        media.preload = 'none';
+        mediaObserver.observe(media);
+      }
+    }
+
+    // Fallback for browsers without <dialog closedby="any"> support (per modern-web-guidance: light-dismiss-a-dialog)
+    if (!('closedBy' in HTMLDialogElement.prototype)) {
+      document.querySelectorAll('dialog').forEach((dialog) => {
+        dialog.addEventListener('click', (event) => {
+          if (event.target !== dialog) return;
+          const rect = dialog.getBoundingClientRect();
+          const isDialogContent = (
+            rect.top <= event.clientY &&
+            event.clientY <= rect.top + rect.height &&
+            rect.left <= event.clientX &&
+            event.clientX <= rect.left + rect.width
+          );
+          if (isDialogContent) return;
+          dialog.close();
+        });
+      });
+    }
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+
+    loadLiveData();
+  </script>
+</body>
+</html>

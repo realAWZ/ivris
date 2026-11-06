@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="115" fill="#000000"/>
+  <rect x="16" y="16" width="480" height="480" rx="100" fill="none" stroke="#27272a" stroke-width="6"/>
+  <text x="50%" y="56%" dominant-baseline="middle" text-anchor="middle" fill="#ffffff" font-family="Georgia, serif" font-weight="bold" font-size="185" letter-spacing="-4">Ivris</text>
+</svg>
