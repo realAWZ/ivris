@@ -303,9 +303,6 @@ def init_db():
         """
     )
 
-    # Ensure all registered users are marked active and confirmed
-    cur.execute("UPDATE users SET email_confirmed = 1 WHERE email_confirmed = 0")
-
     # Seed dedicated Moderation Account if not present
     mod_row = cur.execute(
         "SELECT * FROM users WHERE handle = ? OR email = ?",
@@ -1270,22 +1267,11 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     )
 
                 uid = "usr_" + secrets.token_hex(8)
-                user_obj = {
-                    "id": uid,
-                    "email": email,
-                    "handle": handle,
-                    "display_name": display_name,
-                    "bio": "",
-                    "avatar_url": "",
-                    "account_type": "personal",
-                    "is_verified_institution": 0,
-                    "password_hash": hash_pw(password),
-                }
-                token = create_session_token(user_obj)
+                code = f"{random.randint(100000, 999999)}"
                 conn.execute(
                     """
                     INSERT INTO users (id, email, password_hash, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, '', '', 'personal', 0, 1, '', ?, ?)
+                    VALUES (?, ?, ?, ?, ?, '', '', 'personal', 0, 0, ?, ?, ?)
                     """,
                     (
                         uid,
@@ -1293,21 +1279,18 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         hash_pw(password),
                         handle,
                         display_name,
+                        code,
                         json.dumps(DEFAULT_SETTINGS),
                         int(time.time()),
                     ),
                 )
-                conn.execute(
-                    "INSERT OR IGNORE INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
-                    (token, uid, int(time.time())),
-                )
                 conn.commit()
+                create_database_backup("signup_pending")
                 return self.send_json(
                     {
-                        "token": token,
-                        "account_type": "personal",
-                        "handle": handle,
-                        "user": user_obj,
+                        "needs_confirmation": True,
+                        "email": email,
+                        "confirmation_code_preview": code,
                     }
                 )
 
@@ -1335,9 +1318,16 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     (token, user["id"], int(time.time())),
                 )
                 conn.commit()
+                create_database_backup("signup_verified")
                 cookie_val = f"ivris_session={token}; Max-Age=31536000; Path=/; SameSite=Lax; HttpOnly"
                 return self.send_json(
-                    {"token": token}, extra_headers={"Set-Cookie": cookie_val}
+                    {
+                        "token": token,
+                        "account_type": updated_user["account_type"],
+                        "handle": updated_user["handle"],
+                        "user": dict(updated_user),
+                    },
+                    extra_headers={"Set-Cookie": cookie_val},
                 )
 
             if parsed.path == "/api/signin":
@@ -1684,6 +1674,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 conn.execute("DELETE FROM post_views WHERE post_id = ?", (post_id,))
                 conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
                 conn.commit()
+                create_database_backup("post_deleted")
                 return self.send_json({"ok": True})
 
             if parsed.path == "/api/change-password":
@@ -1736,6 +1727,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM users WHERE id = ?", (uid,))
                 conn.commit()
+                create_database_backup("account_deleted")
                 return self.send_json({"ok": True})
 
             if parsed.path == "/api/posts":
@@ -1833,6 +1825,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     ),
                 )
                 conn.commit()
+                create_database_backup("post_created")
                 return self.send_json({"ok": True, "id": post_id})
 
             if parsed.path == "/api/view":

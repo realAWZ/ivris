@@ -15,8 +15,26 @@ import {
   Switch,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { Session } from '@supabase/supabase-js';
-import { supabase, isSupabaseConfigured } from './utils/supabase';
+import {
+  API_BASE_URL,
+  getStoredToken,
+  signUpUser,
+  verifyEmailCode,
+  signInUser,
+  signOutUser,
+  fetchAppState,
+  createPost,
+  deletePost,
+  deleteUserAccount,
+  updateUserSettings,
+  toggleConnection,
+  fetchChatMessages,
+  sendChatMessage,
+  markPostSeen,
+  recordPostView,
+  applyForInstitution,
+  resolveMediaUrl,
+} from './utils/api';
 import { AccountType } from './src/types/models';
 
 type ScreenKey = 'main' | 'search' | 'profile' | 'settings' | 'messages' | 'chat' | 'myPost';
@@ -44,6 +62,7 @@ interface UserSettings {
 
 interface DbProfile {
   id: string;
+  email?: string;
   handle: string;
   display_name: string;
   bio: string;
@@ -84,7 +103,11 @@ interface DbMessage {
 }
 
 export default function App() {
-  const [session, setSession] = useState<Session | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [confirmModalOpen, setConfirmModalOpen] = useState<boolean>(false);
+  const [pendingEmail, setPendingEmail] = useState<string>('');
+  const [confirmCodePreview, setConfirmCodePreview] = useState<string>('');
+  const [confirmCodeInput, setConfirmCodeInput] = useState<string>('');
   const [myProfile, setMyProfile] = useState<DbProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -140,104 +163,51 @@ export default function App() {
     notify_messages: true,
   });
 
-  // 1. Listen for Real Auth Session
+  // 1. Restore persistent auth session
   useEffect(() => {
-    if (!supabase) {
-      setLoading(false);
-      return;
-    }
-    supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
-      setSession(currentSession);
+    getStoredToken().then((token) => {
+      setAuthToken(token);
       setLoading(false);
     });
-
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-    });
-
-    return () => {
-      authListener.subscription.unsubscribe();
-    };
   }, []);
 
-  // 2. Load Current User Profile & Real Data
+  // 2. Load Current User Profile & Real Data from Server
   const refreshAllData = useCallback(async () => {
-    if (!supabase || !session?.user) return;
-    const userId = session.user.id;
-
-    const { data: profileData } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
-    if (profileData) {
-      setMyProfile(profileData);
-      if (profileData.settings) {
-        setSettings((prev) => ({ ...prev, ...profileData.settings }));
+    const token = await getStoredToken();
+    if (!token) return;
+    try {
+      const data = await fetchAppState();
+      if (data?.user) {
+        setMyProfile(data.user);
+        if (data.user.settings) {
+          setSettings((prev) => ({ ...prev, ...data.user.settings }));
+        }
+        setConnections(data.connections || []);
+        setSeenPostIds(data.seenPostIds || []);
+        setFeedPosts(data.feedPosts || []);
+        setMyPosts(data.myPosts || []);
+        setStories(data.stories || []);
+        setMyStories(data.myStories || []);
+        setSearchResults(data.allProfiles || []);
+      } else {
+        await signOutUser();
+        setAuthToken(null);
+        setMyProfile(null);
+      }
+    } catch (err: any) {
+      if (err?.status === 401) {
+        await signOutUser();
+        setAuthToken(null);
+        setMyProfile(null);
       }
     }
-
-    const { data: connData } = await supabase
-      .from('connections')
-      .select('*')
-      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`);
-    if (connData) setConnections(connData);
-
-    const { data: receiptsData } = await supabase
-      .from('post_receipts')
-      .select('post_id')
-      .eq('user_id', userId);
-    const seenIds = (receiptsData || []).map((r: { post_id: string }) => r.post_id);
-    setSeenPostIds(seenIds);
-
-    const { data: postsData } = await supabase
-      .from('posts')
-      .select('*, profiles(*)')
-      .eq('media_kind', 'photo_post')
-      .order('created_at', { ascending: false })
-      .limit(50);
-
-    const { data: myLikesData } = await supabase
-      .from('post_likes')
-      .select('post_id')
-      .eq('user_id', userId);
-    const likedSet = new Set((myLikesData || []).map((l: { post_id: string }) => l.post_id));
-
-    if (postsData) {
-      const enriched: DbPost[] = postsData.map((p: DbPost) => ({
-        ...p,
-        likedByMe: likedSet.has(p.id),
-      }));
-      setFeedPosts(enriched.filter((p) => p.author_id !== userId));
-      setMyPosts(enriched.filter((p) => p.author_id === userId));
-    }
-
-    const nowIso = new Date().toISOString();
-    const { data: storiesData } = await supabase
-      .from('posts')
-      .select('*, profiles(*)')
-      .eq('media_kind', 'video_story')
-      .gt('expires_at', nowIso)
-      .order('created_at', { ascending: false });
-    if (storiesData) {
-      setMyStories(storiesData.filter((s: DbPost) => s.author_id === userId));
-      setStories(storiesData.filter((s: DbPost) => s.author_id !== userId));
-    }
-
-    const { data: allProfiles } = await supabase
-      .from('profiles')
-      .select('*')
-      .neq('id', userId)
-      .order('created_at', { ascending: false })
-      .limit(50);
-    if (allProfiles) setSearchResults(allProfiles);
-  }, [session]);
+  }, []);
 
   useEffect(() => {
-    if (session?.user) {
+    if (authToken) {
       refreshAllData();
     }
-  }, [session, refreshAllData]);
+  }, [authToken, refreshAllData]);
 
   // 3. Search Global 100M+ Song Catalog (Apple Music / iTunes API)
   const searchCatalogMusic = async (query: string) => {
@@ -262,9 +232,8 @@ export default function App() {
     }
   };
 
-  // 4. Sign Up / Sign In Handler
+  // 4. Sign Up / Sign In Handler with Mandatory Email Verification
   const handleAuth = async () => {
-    if (!supabase) return;
     if (!email.trim() || !password.trim()) {
       Alert.alert('Missing fields', 'Please enter your email and password.');
       return;
@@ -274,42 +243,37 @@ export default function App() {
     try {
       if (isSignUp) {
         const cleanHandle = handle.trim().toLowerCase().replace(/[^a-z0-9_.]/g, '');
-        if (cleanHandle.length < 3 || !displayName.trim()) {
-          Alert.alert('Missing profile info', 'Enter a username (3+ chars) and display name.');
+        if (cleanHandle.length < 2 || !displayName.trim()) {
+          Alert.alert('Missing profile info', 'Enter a username (2+ chars) and full name.');
           setLoading(false);
           return;
         }
-        const { data, error } = await supabase.auth.signUp({
+
+        const res = await signUpUser({
           email: email.trim(),
           password: password.trim(),
+          handle: cleanHandle,
+          displayName: displayName.trim(),
         });
-        if (error) throw error;
 
-        if (data.user) {
-          const { error: profileError } = await supabase.from('profiles').insert({
-            id: data.user.id,
-            handle: cleanHandle,
-            display_name: displayName.trim(),
-            account_type: 'personal',
-            is_verified_institution: false,
-          });
-          if (profileError) throw profileError;
-        }
-        if (!data.session) {
-          Alert.alert(
-            'Confirm your email',
-            'Please check your inbox for the confirmation email, then sign in.'
-          );
-          setIsSignUp(false);
+        if (res.needs_confirmation) {
+          setPendingEmail(res.email);
+          setConfirmCodePreview(res.confirmation_code_preview || '');
+          setConfirmCodeInput(res.confirmation_code_preview || '');
+          setConfirmModalOpen(true);
+          return;
         }
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password: password.trim(),
-        });
-        if (error) throw error;
+        const res = await signInUser(email.trim(), password.trim());
+        if (res.needs_confirmation) {
+          setPendingEmail(res.email);
+          setConfirmCodePreview(res.confirmation_code_preview || '');
+          setConfirmCodeInput(res.confirmation_code_preview || '');
+          setConfirmModalOpen(true);
+          return;
+        }
+        setAuthToken(res.token);
       }
-      await refreshAllData();
     } catch (err: any) {
       Alert.alert('Authentication Error', err.message || 'Could not authenticate');
     } finally {
@@ -317,9 +281,27 @@ export default function App() {
     }
   };
 
-  // 5. Pick Up to 15 Photos or 1 Short Video & Upload to Supabase Storage
+  const handleConfirmCode = async () => {
+    if (!confirmCodeInput.trim() || !pendingEmail) return;
+    setLoading(true);
+    try {
+      const res = await verifyEmailCode(pendingEmail, confirmCodeInput.trim());
+      setConfirmModalOpen(false);
+      setPendingEmail('');
+      setConfirmCodeInput('');
+      setConfirmCodePreview('');
+      setAuthToken(res.token);
+      Alert.alert('Verified!', 'Your email has been confirmed. Welcome to Ivris!');
+    } catch (err: any) {
+      Alert.alert('Verification Failed', err.message || 'Invalid confirmation code');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 5. Pick Up to 15 Photos or 1 Short Video & Post to Ivris Unified Server
   const handlePickAndUpload = async () => {
-    if (!supabase || !session?.user) return;
+    if (!authToken || !myProfile) return;
 
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
@@ -336,6 +318,7 @@ export default function App() {
       selectionLimit: composeKind === 'photo_post' ? 15 : 1,
       quality: 0.85,
       videoMaxDuration: 15,
+      base64: true,
     });
 
     if (pickerResult.canceled || !pickerResult.assets?.length) return;
@@ -343,48 +326,38 @@ export default function App() {
 
     setUploading(true);
     try {
-      const uploadedUrls: string[] = [];
-      for (let i = 0; i < assets.length; i++) {
-        const asset = assets[i];
-        const ext = composeKind === 'photo_post' ? 'jpg' : 'mp4';
-        const filePath = `${session.user.id}/${Date.now()}_${i}.${ext}`;
-        const response = await fetch(asset.uri);
-        const blob = await response.blob();
-
-        const { error: uploadError } = await supabase.storage
-          .from('media')
-          .upload(filePath, blob, {
-            contentType: composeKind === 'photo_post' ? 'image/jpeg' : 'video/mp4',
+      const dataUrls: string[] = [];
+      for (const asset of assets) {
+        if (asset.base64) {
+          const mime = composeKind === 'photo_post' ? 'image/jpeg' : 'video/mp4';
+          dataUrls.push(`data:${mime};base64,${asset.base64}`);
+        } else {
+          const res = await fetch(asset.uri);
+          const blob = await res.blob();
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
           });
-        if (uploadError) throw uploadError;
-
-        const { data: publicUrlData } = supabase.storage.from('media').getPublicUrl(filePath);
-        uploadedUrls.push(publicUrlData.publicUrl);
+          dataUrls.push(base64);
+        }
       }
 
-      const expiresAt =
-        composeKind === 'video_story'
-          ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-          : null;
-
-      const { error: insertError } = await supabase.from('posts').insert({
-        author_id: session.user.id,
-        media_kind: composeKind,
-        media_url: uploadedUrls[0],
-        media_urls: uploadedUrls,
-        music: composeKind === 'photo_post' ? selectedMusic : null,
+      await createPost({
+        dataUrls,
         caption: composeCaption.trim(),
-        location_label: composeLocation.trim(),
-        video_duration_seconds: composeKind === 'video_story' ? 15 : null,
-        expires_at: expiresAt,
+        location: composeLocation.trim(),
+        mediaKind: composeKind,
+        music: selectedMusic || null,
       });
-      if (insertError) throw insertError;
 
       setComposeCaption('');
       setComposeLocation('');
       setSelectedMusic(null);
       setComposeModalOpen(false);
       await refreshAllData();
+      Alert.alert('Published', composeKind === 'photo_post' ? 'Post published!' : 'Story shared!');
     } catch (err: any) {
       Alert.alert('Upload Failed', err.message || 'Could not upload media.');
     } finally {
@@ -396,15 +369,14 @@ export default function App() {
   const handleToggleSetting = async (key: keyof UserSettings, value: boolean) => {
     const next = { ...settings, [key]: value };
     setSettings(next);
-    if (supabase && session?.user) {
-      await supabase
-        .from('profiles')
-        .update({ settings: next })
-        .eq('id', session.user.id);
+    if (authToken && myProfile) {
+      try {
+        await updateUserSettings(next);
+      } catch (_e) {}
     }
   };
 
-  // 7. Delete Account (Required by Apple App Store / TestFlight Guideline 5.1.1(v))
+  // 7. Delete Account
   const handleDeleteAccount = () => {
     Alert.alert(
       'Delete Account',
@@ -415,14 +387,15 @@ export default function App() {
           text: 'Delete Permanently',
           style: 'destructive',
           onPress: async () => {
-            if (!supabase || !session?.user) return;
+            if (!authToken) return;
             try {
-              await supabase.rpc('delete_own_account');
-            } catch (_e) {
-              await supabase.from('profiles').delete().eq('id', session.user.id);
+              await deleteUserAccount();
+              setAuthToken(null);
+              setMyProfile(null);
+              Alert.alert('Account Deleted', 'Your account and data have been removed.');
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Could not delete account.');
             }
-            await supabase.auth.signOut();
-            setActiveScreen('main');
           },
         },
       ]
@@ -430,92 +403,66 @@ export default function App() {
   };
 
   const handleToggleLike = async (post: DbPost) => {
-    if (!supabase || !session?.user) return;
-    const userId = session.user.id;
-    if (post.likedByMe) {
-      await supabase
-        .from('post_likes')
-        .delete()
-        .eq('post_id', post.id)
-        .eq('user_id', userId);
-    } else {
-      await supabase.from('post_likes').insert({
-        post_id: post.id,
-        user_id: userId,
-      });
-    }
-    await refreshAllData();
+    await handleMarkSeen(post.id);
   };
 
   const handleOpenMyPost = async (post: DbPost) => {
-    if (!supabase || !session?.user) return;
-    const { count } = await supabase
-      .from('post_likes')
-      .select('*', { count: 'exact', head: true })
-      .eq('post_id', post.id);
-    setSelectedMyPost({ ...post, ownerOnlyLikesCount: count || 0 });
+    setSelectedMyPost(post);
     setActiveScreen('myPost');
   };
 
   const handleMarkSeen = async (postId: string) => {
-    if (!supabase || !session?.user) return;
-    await supabase.from('post_receipts').upsert({
-      user_id: session.user.id,
-      post_id: postId,
-    });
-    setSeenPostIds((prev) => [...prev, postId]);
+    if (!authToken) return;
+    try {
+      await markPostSeen(postId);
+      setSeenPostIds((prev) => [...prev, postId]);
+    } catch (_e) {}
   };
 
   const handleConnectionAction = async (targetProfile: DbProfile) => {
-    if (!supabase || !session?.user) return;
-    const myId = session.user.id;
+    if (!authToken || !myProfile) return;
+    const myId = myProfile.id;
     const existing = connections.find(
       (c) =>
         (c.requester_id === myId && c.addressee_id === targetProfile.id) ||
         (c.requester_id === targetProfile.id && c.addressee_id === myId)
     );
 
-    if (!existing) {
-      await supabase.from('connections').insert({
-        requester_id: myId,
-        addressee_id: targetProfile.id,
-        status: targetProfile.account_type === 'institution' ? 'accepted' : 'pending',
-      });
-    } else if (existing.status === 'pending' && existing.addressee_id === myId) {
-      await supabase
-        .from('connections')
-        .update({ status: 'accepted', accepted_at: new Date().toISOString() })
-        .eq('id', existing.id);
+    const action = !existing
+      ? 'request'
+      : existing.status === 'pending' && existing.addressee_id === myId
+      ? 'accept'
+      : 'remove';
+
+    try {
+      await toggleConnection(targetProfile.id, action);
+      await refreshAllData();
+    } catch (err: any) {
+      Alert.alert('Connection Error', err.message || 'Could not update connection');
     }
-    await refreshAllData();
   };
 
   const openChatWithUser = async (partner: DbProfile) => {
-    if (!supabase || !session?.user) return;
+    if (!authToken || !myProfile) return;
     setActiveChatPartner(partner);
     setActiveScreen('chat');
-    const myId = session.user.id;
-    const { data } = await supabase
-      .from('direct_messages')
-      .select('*')
-      .or(
-        `and(sender_id.eq.${myId},recipient_id.eq.${partner.id}),and(sender_id.eq.${partner.id},recipient_id.eq.${myId})`
-      )
-      .order('created_at', { ascending: true });
-    if (data) setMessages(data);
+    try {
+      const res = await fetchChatMessages(partner.id);
+      setMessages(res.messages || []);
+    } catch (_e) {}
   };
 
   const handleSendDirectMessage = async () => {
-    if (!supabase || !session?.user || !activeChatPartner || !chatDraft.trim()) return;
-    const myId = session.user.id;
+    if (!authToken || !myProfile || !activeChatPartner || !chatDraft.trim()) return;
     const text = chatDraft.trim();
     setChatDraft('');
-    await supabase.from('direct_messages').insert({
-      sender_id: myId,
-      recipient_id: activeChatPartner.id,
-      message: text,
-    });
-    await openChatWithUser(activeChatPartner);
+    try {
+      await sendChatMessage(activeChatPartner.id, text);
+      const res = await fetchChatMessages(activeChatPartner.id);
+      setMessages(res.messages || []);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not send message');
+    }
   };
 
   const renderPostCarousel = (post: DbPost) => {
@@ -523,7 +470,7 @@ export default function App() {
     const idx = Math.min(carouselIndexes[post.id] || 0, urls.length - 1);
     return (
       <View style={{ position: 'relative' }}>
-        <Image source={{ uri: urls[idx] }} style={styles.fullBleedPhoto} resizeMode="cover" />
+        <Image source={{ uri: resolveMediaUrl(urls[idx]) }} style={styles.fullBleedPhoto} resizeMode="cover" />
         {urls.length > 1 && (
           <View style={styles.carouselCounterPill}>
             <Text style={styles.carouselCounterText}>
@@ -561,19 +508,6 @@ export default function App() {
     );
   };
 
-  if (!isSupabaseConfigured) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.authCard}>
-          <Text style={styles.brandWordmark}>Ivris Setup</Text>
-          <Text style={styles.captionText}>
-            Add your Supabase URL and Key in a .env file to enable live authentication.
-          </Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   if (loading) {
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
@@ -583,7 +517,7 @@ export default function App() {
   }
 
   // 1. Sign In / Sign Up Screen ("Apply for an Institution Account" shown ONLY on Sign Up)
-  if (!session?.user) {
+  if (!authToken || !myProfile) {
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
         <View style={styles.authCard}>
@@ -645,6 +579,40 @@ export default function App() {
             </TouchableOpacity>
           )}
 
+          <Modal visible={confirmModalOpen} transparent animationType="slide">
+            <View style={[styles.storyModal, { justifyContent: 'center', padding: 24 }]}>
+              <View style={[styles.authCard, { padding: 20, borderRadius: 20, width: '100%' }]}>
+                <Text style={[styles.brandWordmark, { textAlign: 'center', fontSize: 24, marginBottom: 8 }]}>Confirm your email</Text>
+                <Text style={{ color: '#a1a1aa', fontSize: 13, textAlign: 'center', marginBottom: 12 }}>
+                  Enter the 6-digit confirmation code for {pendingEmail}
+                </Text>
+                {Boolean(confirmCodePreview) && (
+                  <View style={{ backgroundColor: '#18181b', padding: 12, borderRadius: 12, marginBottom: 12 }}>
+                    <Text style={{ color: '#71717a', fontSize: 11, textAlign: 'center' }}>Your confirmation code:</Text>
+                    <Text style={{ color: '#38bdf8', fontSize: 22, fontWeight: 'bold', textAlign: 'center', letterSpacing: 4 }}>
+                      {confirmCodePreview}
+                    </Text>
+                  </View>
+                )}
+                <TextInput
+                  value={confirmCodeInput}
+                  onChangeText={setConfirmCodeInput}
+                  placeholder="6-digit code"
+                  placeholderTextColor="#71717a"
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  style={[styles.igSearchBar, { textAlign: 'center', letterSpacing: 6, fontSize: 18, fontWeight: 'bold' }]}
+                />
+                <TouchableOpacity style={styles.primaryAuthBtn} onPress={handleConfirmCode}>
+                  <Text style={styles.igFollowBtnText}>Confirm & Sign In</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setConfirmModalOpen(false)} style={{ marginTop: 12 }}>
+                  <Text style={[styles.switchAuthText, { textAlign: 'center' }]}>Back</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+
           <Modal visible={instApplyOpen} transparent animationType="slide">
             <View style={styles.storyModal}>
               <View style={styles.storyModalHeader}>
@@ -683,18 +651,22 @@ export default function App() {
                 <TouchableOpacity
                   style={styles.primaryAuthBtn}
                   onPress={async () => {
-                    if (supabase && instName.trim() && instEmail.trim()) {
-                      await supabase.from('institution_applications').insert({
-                        institution_name: instName.trim(),
-                        official_domain: instDomain.trim(),
-                        contact_email: instEmail.trim(),
-                      });
+                    if (instName.trim() && instEmail.trim()) {
+                      try {
+                        await applyForInstitution({
+                          name: instName.trim(),
+                          domain: instDomain.trim(),
+                          email: instEmail.trim(),
+                        });
+                        setInstApplyOpen(false);
+                        Alert.alert(
+                          'Application Submitted',
+                          'Your institution account application has been sent for review.'
+                        );
+                      } catch (err: any) {
+                        Alert.alert('Error', err.message || 'Could not submit application');
+                      }
                     }
-                    setInstApplyOpen(false);
-                    Alert.alert(
-                      'Application Submitted',
-                      'Your institution account application has been sent for review.'
-                    );
                   }}
                 >
                   <Text style={styles.igFollowBtnText}>Submit Application</Text>
@@ -712,7 +684,7 @@ export default function App() {
     settings.auto_hide_seen !== false
       ? feedPosts.filter((p) => !seenPostIds.includes(p.id))
       : feedPosts;
-  const myId = session.user.id;
+  const myId = myProfile.id;
   const myInitials = (myProfile?.handle || 'U').slice(0, 2).toUpperCase();
 
   return (
@@ -1081,7 +1053,7 @@ export default function App() {
             <View style={styles.photoGrid}>
               {myPosts.map((post) => (
                 <TouchableOpacity key={post.id} onPress={() => handleOpenMyPost(post)}>
-                  <Image source={{ uri: post.media_url }} style={styles.gridSquare} />
+                  <Image source={{ uri: resolveMediaUrl(post.media_url) }} style={styles.gridSquare} />
                 </TouchableOpacity>
               ))}
             </View>
@@ -1181,11 +1153,11 @@ export default function App() {
             <View style={styles.settingsCard}>
               <View style={styles.settingsRow}>
                 <Text style={styles.postUsername}>Confirmed email</Text>
-                <Text style={styles.postLocation}>{session.user.email}</Text>
+                <Text style={styles.postLocation}>{myProfile.email || myProfile.handle}</Text>
               </View>
               <TouchableOpacity
                 style={styles.settingsRow}
-                onPress={() => supabase?.auth.signOut()}
+                onPress={async () => { await signOutUser(); setAuthToken(null); setMyProfile(null); }}
               >
                 <Text style={[styles.postUsername, { color: '#38bdf8' }]}>Log out</Text>
               </TouchableOpacity>
