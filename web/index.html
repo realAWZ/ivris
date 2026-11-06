@@ -76,10 +76,43 @@
       outline: 3px solid #38bdf8;
       outline-offset: 4px;
     }
+    /* iPhone Dynamic Island / Status Bar & Home Indicator Safe Areas */
+    .safe-top-header {
+      padding-top: max(calc(env(safe-area-inset-top, 0px) + 12px), 16px);
+      padding-bottom: 12px;
+    }
+    .safe-bottom-nav {
+      padding-top: 8px;
+      padding-bottom: max(calc(env(safe-area-inset-bottom, 0px) + 12px), 16px);
+    }
+    @media (display-mode: standalone), (pointer: coarse) {
+      .safe-top-header {
+        padding-top: max(calc(env(safe-area-inset-top, 50px) + 8px), 56px);
+        padding-bottom: 12px;
+      }
+      .safe-bottom-nav {
+        padding-top: 10px;
+        padding-bottom: max(calc(env(safe-area-inset-bottom, 28px) + 10px), 34px);
+      }
+    }
+    /* Accessible Target Sizes (per modern-web-guidance: accessibility) */
+    .nav-touch-target {
+      min-block-size: 44px;
+      min-inline-size: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    @media (pointer: coarse) {
+      .nav-touch-target {
+        min-block-size: 48px;
+        min-inline-size: 54px;
+      }
+    }
   </style>
 </head>
-<body class="bg-black text-white antialiased min-h-screen flex justify-center">
-  <div id="app-root" class="w-full max-w-[430px] min-h-screen bg-black border-x border-zinc-900 flex flex-col justify-between relative">
+<body class="bg-black text-white antialiased min-h-[100dvh] flex justify-center">
+  <div id="app-root" class="w-full max-w-[430px] min-h-[100dvh] bg-black border-x border-zinc-900 flex flex-col justify-between relative">
     <!-- Dynamically rendered by JS -->
   </div>
 
@@ -1144,25 +1177,25 @@
       let headerHtml = '';
       if (appState.screen === 'settings') {
         headerHtml = `
-          <header class="px-4 py-3 border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
-            <button onclick="navigate('profile')" class="text-xs font-semibold flex items-center gap-1">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+            <button onclick="navigate('profile')" class="nav-touch-target text-sm font-semibold flex items-center gap-1 -ml-2">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
               <span>Profile</span>
             </button>
-            <h1 id="screen-heading" tabindex="-1" class="text-sm font-bold focus:outline-none">Settings and activity</h1>
-            <div class="w-12"></div>
+            <h1 id="screen-heading" tabindex="-1" class="text-base font-bold focus:outline-none">Settings and activity</h1>
+            <div class="w-14"></div>
           </header>
         `;
       } else if (appState.screen === 'profile') {
         headerHtml = `
-          <header class="px-4 py-3 border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
-            <h1 id="screen-heading" tabindex="-1" class="text-base font-bold focus:outline-none">${escapeAttr(appState.user.handle)}</h1>
-            <div class="flex items-center gap-5">
-              <button onclick="openComposeWithKind('photo_post')" aria-label="Create post">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><path stroke-linecap="round" d="M12 8v8M8 12h8"/></svg>
+          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+            <h1 id="screen-heading" tabindex="-1" class="text-xl font-bold focus:outline-none">${escapeAttr(appState.user.handle)}</h1>
+            <div class="flex items-center gap-2 -mr-2">
+              <button onclick="openComposeWithKind('photo_post')" aria-label="Create post" class="nav-touch-target">
+                <svg class="w-[26px] h-[26px]" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><path stroke-linecap="round" d="M12 8v8M8 12h8"/></svg>
               </button>
-              <button onclick="navigate('settings')" aria-label="Open Settings">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/></svg>
+              <button onclick="navigate('settings')" aria-label="Open Settings" class="nav-touch-target">
+                <svg class="w-[26px] h-[26px]" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/></svg>
               </button>
             </div>
           </header>
@@ -1170,30 +1203,30 @@
       } else if (['messages', 'chat', 'myPost'].includes(appState.screen)) {
         const backTarget = appState.screen === 'myPost' ? 'profile' : (appState.screen === 'chat' ? 'messages' : 'main');
         headerHtml = `
-          <header class="px-4 py-3 border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
-            <button onclick="navigate('${backTarget}')" class="text-xs font-semibold flex items-center gap-1">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+            <button onclick="navigate('${backTarget}')" class="nav-touch-target text-sm font-semibold flex items-center gap-1 -ml-2">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
               <span>Back</span>
             </button>
-            <h1 id="screen-heading" tabindex="-1" class="text-sm font-bold focus:outline-none">
+            <h1 id="screen-heading" tabindex="-1" class="text-base font-bold focus:outline-none">
               ${appState.screen === 'myPost' ? 'Post' : (appState.screen === 'chat' ? escapeAttr(appState.activeChatPartner?.display_name || 'Chat') : 'Messages')}
             </h1>
-            <div class="w-10"></div>
+            <div class="w-12"></div>
           </header>
         `;
       } else {
         headerHtml = `
-          <header class="px-4 py-3 border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
-            <h1 id="screen-heading" tabindex="-1" class="text-xl font-bold tracking-tight focus:outline-none" style="font-family: Georgia, serif;">Ivris</h1>
-            <div class="flex items-center gap-5">
-              <button onclick="navigate('search', 'requests')" aria-label="Requests" class="relative">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+            <h1 id="screen-heading" tabindex="-1" class="text-[26px] font-bold tracking-tight focus:outline-none leading-none" style="font-family: Georgia, serif;">Ivris</h1>
+            <div class="flex items-center gap-2 -mr-2">
+              <button onclick="navigate('search', 'requests')" aria-label="Requests" class="nav-touch-target relative">
+                <svg class="w-[26px] h-[26px]" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
                 </svg>
-                ${incomingReqs > 0 ? `<span class="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#ff3040]"></span>` : ''}
+                ${incomingReqs > 0 ? `<span class="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-[#ff3040]"></span>` : ''}
               </button>
-              <button onclick="navigate('messages')" aria-label="Direct Messages">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+              <button onclick="navigate('messages')" aria-label="Direct Messages" class="nav-touch-target">
+                <svg class="w-[26px] h-[26px]" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
                 </svg>
               </button>
@@ -1214,39 +1247,48 @@
 
         // Always-visible "Your story" bubble on the Home screen
         const storiesBar = `
-          <div class="px-3.5 py-2.5 border-b border-zinc-900 flex gap-4 overflow-x-auto no-scrollbar">
-            <button onclick="handleYourStoryClick()" class="flex flex-col items-center gap-1 shrink-0">
-              <div class="relative p-[2px] rounded-full ${hasMyStory ? 'ig-ring-friend' : 'bg-zinc-800'}">
-                <div class="w-14 h-14 rounded-full bg-zinc-900 border-2 border-black flex items-center justify-center text-xs font-bold">
+          <div class="px-4 py-3.5 border-b border-zinc-900 flex gap-4 overflow-x-auto no-scrollbar">
+            <button onclick="handleYourStoryClick()" class="flex flex-col items-center gap-1.5 shrink-0">
+              <div class="relative p-[2.5px] rounded-full ${hasMyStory ? 'ig-ring-friend' : 'bg-zinc-800'}">
+                <div class="w-[68px] h-[68px] rounded-full bg-zinc-900 border-2 border-black flex items-center justify-center text-sm font-bold">
                   ${myInitials}
                 </div>
-                <span onclick="event.stopPropagation();openComposeWithKind('video_story')" class="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-sky-500 text-white border-2 border-black flex items-center justify-center text-xs font-bold leading-none">+</span>
+                <span onclick="event.stopPropagation();openComposeWithKind('video_story')" class="absolute bottom-0 right-0 w-6 h-6 rounded-full bg-sky-500 text-white border-2 border-black flex items-center justify-center text-sm font-bold leading-none">+</span>
               </div>
-              <span class="text-xs text-zinc-300 max-w-[64px] truncate">Your story</span>
+              <span class="text-xs text-zinc-200 max-w-[74px] truncate">Your story</span>
             </button>
 
             ${appState.stories.map((st, idx) => `
-              <button onclick="openStoryViewer(appState.stories[${idx}], false)" class="flex flex-col items-center gap-1 shrink-0">
-                <div class="p-[2px] rounded-full ${st.is_verified_institution ? 'ig-ring-institution' : 'ig-ring-friend'}">
-                  <div class="w-14 h-14 rounded-full bg-zinc-900 border-2 border-black flex items-center justify-center text-xs font-bold">
+              <button onclick="openStoryViewer(appState.stories[${idx}], false)" class="flex flex-col items-center gap-1.5 shrink-0">
+                <div class="p-[2.5px] rounded-full ${st.is_verified_institution ? 'ig-ring-institution' : 'ig-ring-friend'}">
+                  <div class="w-[68px] h-[68px] rounded-full bg-zinc-900 border-2 border-black flex items-center justify-center text-sm font-bold">
                     ${(st.handle || 'U').slice(0, 2).toUpperCase()}
                   </div>
                 </div>
-                <span class="text-xs max-w-[64px] truncate">${st.handle || 'user'}</span>
+                <span class="text-xs max-w-[74px] truncate">${st.handle || 'user'}</span>
               </button>
             `).join('')}
           </div>
         `;
 
         const feedCards = unseen.length === 0 ? `
-          <div class="px-8 py-20 text-center space-y-3">
-            <p class="text-sm font-semibold">You’re all caught up</p>
-            <p class="text-xs text-zinc-400 leading-relaxed">
-              Connect with friends or follow institutions in Search to see new posts.
-            </p>
-            <button onclick="navigate('search', 'accounts')" class="px-5 py-2 rounded-lg bg-sky-500 text-white text-xs font-semibold">
-              Search
-            </button>
+          <div class="px-8 py-24 text-center space-y-4">
+            <div class="w-16 h-16 mx-auto rounded-full border-2 border-zinc-800 bg-zinc-900/50 flex items-center justify-center">
+              <svg class="w-8 h-8 text-sky-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+              </svg>
+            </div>
+            <div class="space-y-1.5">
+              <p class="text-base font-semibold text-white">You’re all caught up</p>
+              <p class="text-sm text-zinc-400 leading-relaxed max-w-[260px] mx-auto">
+                Connect with friends or follow institutions in Search to see new posts.
+              </p>
+            </div>
+            <div class="pt-1">
+              <button onclick="navigate('search', 'accounts')" class="px-7 py-2.5 rounded-xl bg-sky-500 text-white text-sm font-semibold shadow-sm active:scale-95 transition">
+                Search
+              </button>
+            </div>
           </div>
         ` : unseen.map(post => {
           const urls = (post.media_urls && post.media_urls.length > 0) ? post.media_urls : [post.media_url];
@@ -1664,18 +1706,18 @@
       }
 
       const footerNav = `
-        <nav aria-label="Bottom Navigation" class="px-8 py-3 border-t border-zinc-900 flex items-center justify-between sticky bottom-0 bg-black z-20">
-          <button onclick="navigate('main')" aria-label="Home" class="${appState.screen === 'main' ? 'opacity-100' : 'opacity-45'}">
-            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1v-9.5z"/></svg>
+        <nav aria-label="Bottom Navigation" class="px-6 safe-bottom-nav border-t border-zinc-900 flex items-center justify-between sticky bottom-0 bg-black/95 backdrop-blur z-20">
+          <button onclick="navigate('main')" aria-label="Home" class="nav-touch-target ${appState.screen === 'main' ? 'opacity-100' : 'opacity-50'}">
+            <svg class="w-7 h-7" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1v-9.5z"/></svg>
           </button>
-          <button onclick="navigate('search')" aria-label="Search" class="${appState.screen === 'search' ? 'opacity-100' : 'opacity-45'}">
-            <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7.5"/><path stroke-linecap="round" d="M20 20l-3.8-3.8"/></svg>
+          <button onclick="navigate('search')" aria-label="Search" class="nav-touch-target ${appState.screen === 'search' ? 'opacity-100' : 'opacity-50'}">
+            <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7.5"/><path stroke-linecap="round" d="M20 20l-3.8-3.8"/></svg>
           </button>
-          <button onclick="openComposeWithKind('photo_post')" aria-label="New Share" class="opacity-75 hover:opacity-100">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><path stroke-linecap="round" d="M12 8v8M8 12h8"/></svg>
+          <button onclick="openComposeWithKind('photo_post')" aria-label="New Share" class="nav-touch-target opacity-80 hover:opacity-100">
+            <svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2.1" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><path stroke-linecap="round" d="M12 8v8M8 12h8"/></svg>
           </button>
-          <button onclick="navigate('profile')" aria-label="Profile" class="${['profile', 'settings', 'myPost'].includes(appState.screen) ? 'opacity-100' : 'opacity-45'}">
-            <div class="w-6 h-6 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-bold">
+          <button onclick="navigate('profile')" aria-label="Profile" class="nav-touch-target ${['profile', 'settings', 'myPost'].includes(appState.screen) ? 'opacity-100' : 'opacity-55'}">
+            <div class="w-7 h-7 rounded-full bg-zinc-800 ${['profile', 'settings', 'myPost'].includes(appState.screen) ? 'ring-2 ring-white' : ''} flex items-center justify-center text-xs font-bold">
               ${(appState.user.handle || 'U').slice(0, 1).toUpperCase()}
             </div>
           </button>
