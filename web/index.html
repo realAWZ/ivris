@@ -1592,70 +1592,6 @@
       strip.classList.remove('hidden');
     }
 
-    function analyzeDataUrlForNudityClient(dataUrl) {
-      return new Promise((resolve) => {
-        if (!dataUrl || !dataUrl.startsWith('data:image/')) {
-          resolve({ flagged: false, reason: '' });
-          return;
-        }
-        const img = new Image();
-        img.onerror = () => resolve({ flagged: false, reason: '' });
-        img.onload = () => {
-          try {
-            const w = 120;
-            const h = 120;
-            const c = document.createElement('canvas');
-            c.width = w;
-            c.height = h;
-            const ctx = c.getContext('2d');
-            ctx.drawImage(img, 0, 0, w, h);
-            const data = ctx.getImageData(0, 0, w, h).data;
-            let skin = 0;
-            let centerSkin = 0;
-            let centerTotal = 0;
-            let torsoSkin = 0;
-            let torsoTotal = 0;
-            const total = w * h;
-            for (let i = 0; i < total; i++) {
-              const r = data[i * 4];
-              const g = data[i * 4 + 1];
-              const b = data[i * 4 + 2];
-              const row = Math.floor(i / w);
-              const col = i % w;
-              const inCenter = row >= 18 && row <= 102 && col >= 18 && col <= 102;
-              const inTorso = row >= 36 && row <= 108 && col >= 24 && col <= 96;
-              if (inCenter) centerTotal++;
-              if (inTorso) torsoTotal++;
-
-              const y = 0.299 * r + 0.587 * g + 0.114 * b;
-              const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
-              const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
-
-              const rgbSkin = r > 85 && g > 35 && b > 18 && (Math.max(r, g, b) - Math.min(r, g, b)) > 12 && Math.abs(r - g) > 10 && r >= g && r >= b;
-              const ycbcrSkin = cb >= 77 && cb <= 132 && cr >= 131 && cr <= 178 && y > 50;
-              if (rgbSkin && ycbcrSkin) {
-                skin++;
-                if (inCenter) centerSkin++;
-                if (inTorso) torsoSkin++;
-              }
-            }
-            const overallRatio = skin / total;
-            const centerRatio = centerSkin / Math.max(1, centerTotal);
-            const torsoRatio = torsoSkin / Math.max(1, torsoTotal);
-            if ((centerRatio >= 0.48 && torsoRatio >= 0.50 && overallRatio >= 0.36) || (centerRatio >= 0.58 && overallRatio >= 0.44)) {
-              resolve({
-                flagged: true,
-                reason: `Client+Server nudity filter triggered (torso ${Math.round(torsoRatio * 100)}%, center ${Math.round(centerRatio * 100)}%).`
-              });
-              return;
-            }
-          } catch (_e) {}
-          resolve({ flagged: false, reason: '' });
-        };
-        img.src = dataUrl;
-      });
-    }
-
     async function handleCreatePost() {
       const fileInput = document.getElementById('media-file-input');
       const caption = document.getElementById('compose-caption').value.trim();
@@ -1679,26 +1615,6 @@
         const slice = appState.composeKind === 'photo_post' ? files.slice(0, 15) : files.slice(0, 1);
         const dataUrls = await Promise.all(slice.map(f => fileToDataUrl(f)));
 
-        let clientNudityFlagged = false;
-        let clientNudityReason = '';
-        for (const f of slice) {
-          if (/\b(nude|nudes|nudity|naked|nsfw|porn|xxx|onlyfans|topless)\b/i.test(f.name || '')) {
-            clientNudityFlagged = true;
-            clientNudityReason = `Explicit filename detected (${f.name}).`;
-            break;
-          }
-        }
-        if (!clientNudityFlagged) {
-          for (const dUrl of dataUrls) {
-            const check = await analyzeDataUrlForNudityClient(dUrl);
-            if (check.flagged) {
-              clientNudityFlagged = true;
-              clientNudityReason = check.reason;
-              break;
-            }
-          }
-        }
-
         await apiFetch('/api/posts', {
           method: 'POST',
           body: JSON.stringify({
@@ -1706,9 +1622,7 @@
             caption,
             location_label: location,
             music: appState.selectedMusic || null,
-            data_urls: dataUrls,
-            client_nudity_flagged: clientNudityFlagged,
-            client_nudity_reason: clientNudityReason
+            data_urls: dataUrls
           })
         });
 
@@ -2093,6 +2007,23 @@
     }
 
     // In-App Moderator Actions (when signed in as @moderator)
+    async function modSyncWithUpstream() {
+      const btn = document.getElementById('btn-sync-upstream');
+      if (btn) btn.textContent = 'Syncing with cloud server...';
+      try {
+        const res = await apiFetch('/api/admin/sync-upstream', { method: 'POST' });
+        alert(res.message || res.reason || 'Synced successfully with cloud database!');
+        await loadLiveData();
+      } catch (err) {
+        alert('Sync failed: ' + err.message);
+      } finally {
+        if (btn) btn.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+          <span>Sync with Cloud Server (https://ivris.onrender.com)</span>
+        `;
+      }
+    }
+
     async function modTakeDownPost(postId, reason) {
       try {
         await apiFetch('/api/moderation/takedown', {
@@ -2492,8 +2423,14 @@
             <div class="flex items-center gap-2.5 min-w-0">
               <div class="w-9 h-9 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">${renderAvatarInner(u, 'text-xs')}</div>
               <div class="min-w-0">
-                <p class="text-xs font-semibold truncate">@${escapeAttr(u.handle)}</p>
-                <p class="text-[11px] text-zinc-400 truncate">${escapeAttr(u.email)} · ${escapeAttr(u.account_type)}</p>
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <p class="text-xs font-semibold truncate">@${escapeAttr(u.handle)}</p>
+                  ${u.email_confirmed
+                    ? '<span class="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[9px] font-semibold">Verified</span>'
+                    : '<span class="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[9px] font-semibold">Pending Verification</span>'}
+                  ${u.is_verified_institution ? '<span class="px-1.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300 text-[9px] font-semibold">Institution</span>' : ''}
+                </div>
+                <p class="text-[11px] text-zinc-400 truncate">${escapeAttr(u.email)} · ${escapeAttr(u.display_name || '')} · Joined ${formatRelativeShort(u.created_at)} ago</p>
               </div>
             </div>
             <button onclick="if(confirm('Remove @${escapeAttr(u.handle)} and all their posts?'))modDeleteUser('${u.id}', '${escapeAttr(u.handle)}')" class="px-3 py-1.5 rounded-lg bg-rose-600/90 text-white text-xs font-semibold shrink-0">Remove</button>
@@ -2543,6 +2480,11 @@
             </div>
 
             <div class="space-y-2">
+              <button id="btn-sync-upstream" onclick="modSyncWithUpstream()" class="w-full py-2.5 px-3 rounded-xl bg-sky-500/20 border border-sky-500/40 text-xs font-semibold text-sky-300 active:scale-95 transition flex items-center justify-center gap-1.5">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                <span>Sync with Cloud Server (https://ivris.onrender.com)</span>
+              </button>
+
               <a href="/api/admin/backup/download" download class="w-full py-3 px-4 rounded-xl bg-white text-black font-semibold text-xs flex items-center justify-center gap-2 shadow-lg active:scale-[0.98] transition">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 <span>Download Live Database (.db)</span>

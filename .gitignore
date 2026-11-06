@@ -3,7 +3,9 @@ node_modules/
 dist/
 web-build/
 web/uploads/*
+uploads/
 backups/ivris_backup_*.db
+backups/ivris_upstream_sync.db
 !backups/ivris_latest.db
 .DS_Store
 .env

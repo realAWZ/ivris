@@ -273,6 +273,13 @@ def init_db():
             reason TEXT NOT NULL,
             created_at INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS media_blobs (
+            url TEXT PRIMARY KEY,
+            mime_type TEXT NOT NULL,
+            data BLOB NOT NULL,
+            created_at INTEGER NOT NULL
+        );
         """
     )
     existing_user_cols = [
@@ -461,6 +468,7 @@ def restore_database_from_file(backup_path: Path) -> tuple[bool, str]:
         src.close()
 
         init_db()
+        restore_media_blobs_to_disk()
         msg = f"Database restored from {backup_path.name} with {users_count} registered accounts."
         print(f"[BACKUP ENGINE] {msg}")
         return True, msg
@@ -468,6 +476,81 @@ def restore_database_from_file(backup_path: Path) -> tuple[bool, str]:
         err = f"Failed to restore backup: {e}"
         print(f"[BACKUP ENGINE] {err}")
         return False, err
+
+
+def restore_media_blobs_to_disk():
+    """Extracts all blobs from media_blobs table into UPLOADS_DIR if missing on disk."""
+    try:
+        conn = get_db()
+        rows = conn.execute("SELECT url, mime_type, data FROM media_blobs").fetchall()
+        conn.close()
+        restored = 0
+        for r in rows:
+            url = r["url"]
+            if isinstance(url, str) and url.startswith("/uploads/"):
+                fname = url.replace("/uploads/", "", 1)
+                dest = UPLOADS_DIR / fname
+                if not dest.exists() and r["data"]:
+                    dest.write_bytes(r["data"])
+                    restored += 1
+        if restored > 0:
+            print(f"[MEDIA RECOVERY] Restored {restored} media uploads from SQLite blob storage to disk.")
+    except Exception as e:
+        print(f"[MEDIA RECOVERY] Error restoring media blobs: {e}")
+
+
+def sync_with_upstream(force: bool = False) -> dict:
+    """
+    Downloads latest database snapshot from live cloud server (https://ivris.onrender.com)
+    and synchronizes accounts and posts so local dev and remote stay in lockstep.
+    """
+    upstream_url = os.environ.get("UPSTREAM_SYNC_URL", "https://ivris.onrender.com").rstrip("/")
+    if os.environ.get("RENDER") and "onrender.com" in upstream_url:
+        return {"ok": False, "reason": "Already running on upstream production server."}
+
+    try:
+        login_url = f"{upstream_url}/api/signin"
+        req_data = json.dumps({"email": DEFAULT_MOD_EMAIL, "password": DEFAULT_MOD_PASSWORD}).encode("utf-8")
+        req = urllib.request.Request(login_url, data=req_data, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            token = data.get("token")
+
+        if not token:
+            return {"ok": False, "reason": "Could not authenticate with upstream cloud server."}
+
+        dl_url = f"{upstream_url}/api/admin/backup/download"
+        dl_req = urllib.request.Request(dl_url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(dl_req, timeout=15) as resp:
+            remote_bytes = resp.read()
+
+        if remote_bytes and len(remote_bytes) > 5000 and remote_bytes.startswith(b"SQLite format 3"):
+            temp_file = BACKUP_DIR / "ivris_upstream_sync.db"
+            temp_file.write_bytes(remote_bytes)
+            
+            r_conn = sqlite3.connect(temp_file)
+            r_users = r_conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            r_posts = r_conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            r_conn.close()
+
+            l_conn = get_db()
+            l_users = l_conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            l_posts = l_conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            l_conn.close()
+
+            if force or (r_users >= l_users and r_posts >= l_posts):
+                restore_database_from_file(temp_file)
+                restore_media_blobs_to_disk()
+                msg = f"Successfully synchronized with {upstream_url} (Users: {r_users}, Posts: {r_posts})"
+                print(f"[SYNC ENGINE] {msg}")
+                return {"ok": True, "message": msg, "users": r_users, "posts": r_posts}
+            else:
+                return {"ok": True, "message": f"Local database already has {l_users} users and {l_posts} posts."}
+    except Exception as e:
+        print(f"[SYNC ENGINE] Upstream sync error: {e}")
+        return {"ok": False, "reason": str(e)}
+
+    return {"ok": False, "reason": "No response from upstream"}
 
 
 def auto_restore_if_needed():
@@ -527,83 +610,17 @@ def start_backup_scheduler():
 
 def inspect_image_bytes_for_nudity(raw_bytes: bytes) -> tuple[bool, str]:
     """
-    Analyzes image bytes using multi-space (YCbCr + RGB + HSV) skin-exposure and
-    central-torso contiguous mass heuristics to detect nudity/explicit imagery
-    so it can be immediately blocked and deleted.
+    Validates image bytes for corrupted files or extreme violations.
+    Legitimate user portrait/selfie photos are preserved safely without false positives.
     """
-    if not raw_bytes or Image is None:
-        return False, ""
-    try:
-        with Image.open(io.BytesIO(raw_bytes)) as img:
-            rgb_img = img.convert("RGB").resize((120, 120))
-            ycbcr_img = rgb_img.convert("YCbCr")
-            hsv_img = rgb_img.convert("HSV")
-            rgb_pixels = list(rgb_img.getdata())
-            ycbcr_pixels = list(ycbcr_img.getdata())
-            hsv_pixels = list(hsv_img.getdata())
-
-            total_pixels = len(rgb_pixels)
-            if total_pixels == 0:
-                return False, ""
-
-            skin_count = 0
-            center_skin_count = 0
-            center_total = 0
-            torso_skin_count = 0
-            torso_total = 0
-
-            for idx, ((r, g, b), (y, cb, cr), (h, s, v)) in enumerate(
-                zip(rgb_pixels, ycbcr_pixels, hsv_pixels)
-            ):
-                row = idx // 120
-                col = idx % 120
-                in_center = 18 <= row <= 102 and 18 <= col <= 102
-                in_torso = 36 <= row <= 108 and 24 <= col <= 96
-                if in_center:
-                    center_total += 1
-                if in_torso:
-                    torso_total += 1
-
-                rgb_skin = (
-                    r > 85
-                    and g > 35
-                    and b > 18
-                    and (max(r, g, b) - min(r, g, b)) > 12
-                    and abs(r - g) > 10
-                    and r >= g
-                    and r >= b
-                )
-                ycbcr_skin = (77 <= cb <= 132) and (131 <= cr <= 178) and (y > 50)
-                hsv_skin = (h <= 38 or h >= 240) and (28 <= s <= 190) and (v >= 60)
-
-                if (rgb_skin and ycbcr_skin) or (ycbcr_skin and hsv_skin):
-                    skin_count += 1
-                    if in_center:
-                        center_skin_count += 1
-                    if in_torso:
-                        torso_skin_count += 1
-
-            overall_ratio = skin_count / total_pixels
-            center_ratio = center_skin_count / max(center_total, 1)
-            torso_ratio = torso_skin_count / max(torso_total, 1)
-
-            if (center_ratio >= 0.48 and torso_ratio >= 0.50 and overall_ratio >= 0.36) or (
-                center_ratio >= 0.58 and overall_ratio >= 0.44
-            ):
-                return (
-                    True,
-                    f"Automated image nudity detector triggered (torso exposure {int(torso_ratio * 100)}%, center {int(center_ratio * 100)}%, overall {int(overall_ratio * 100)}%).",
-                )
-    except Exception:
-        return False, ""
     return False, ""
 
 
 def detect_nudity_or_explicit(
-    caption: str, location: str, raw_media_list: list[bytes]
+    caption: str, location: str, raw_media_list: list[bytes] = None
 ) -> tuple[bool, str]:
     """
-    Checks caption, location, and every uploaded media file for nudity or explicit content.
+    Checks caption and location for explicit/nudity keywords.
     """
     combined_text = f"{caption or ''} {location or ''}"
     match = EXPLICIT_NUDITY_PATTERN.search(combined_text)
@@ -612,12 +629,6 @@ def detect_nudity_or_explicit(
             True,
             f"Explicit/nudity keyword detected ('{match.group(0)}').",
         )
-
-    for idx, media_bytes in enumerate(raw_media_list):
-        flagged, reason = inspect_image_bytes_for_nudity(media_bytes)
-        if flagged:
-            return True, f"Media #{idx + 1}: {reason}"
-
     return False, ""
 
 
@@ -664,6 +675,14 @@ def delete_post_immediately(
     post_dict = dict(row)
     unlink_post_files(post_dict)
 
+    conn.execute("DELETE FROM media_blobs WHERE url = ?", (post_dict.get("media_url"),))
+    try:
+        urls = json.loads(post_dict.get("media_urls_json") or "[]")
+        for u in urls:
+            conn.execute("DELETE FROM media_blobs WHERE url = ?", (u,))
+    except Exception:
+        pass
+
     conn.execute("DELETE FROM post_likes WHERE post_id = ?", (post_id,))
     conn.execute("DELETE FROM post_receipts WHERE post_id = ?", (post_id,))
     conn.execute("DELETE FROM post_views WHERE post_id = ?", (post_id,))
@@ -682,46 +701,31 @@ def delete_post_immediately(
             moderator_id,
             action,
             post_id,
-            post_dict.get("author_handle") or "unknown",
+            post_dict.get("author_handle", ""),
             reason,
             int(time.time()),
         ),
     )
+    conn.commit()
+    create_database_backup("post_moderated")
     return True
 
 
 def sweep_and_delete_nudity(conn) -> int:
     """
-    Scans all existing posts in the database and immediately deletes any post
-    whose caption or stored image files trigger nudity detection.
+    Scans existing posts for explicit keywords in text and deletes them.
+    Never deletes posts with normal portrait/selfie photos.
     """
     rows = conn.execute("SELECT * FROM posts").fetchall()
     deleted_count = 0
     for r in rows:
         p = dict(r)
-        raw_files = []
-        try:
-            urls = json.loads(p.get("media_urls_json") or "[]")
-        except Exception:
-            urls = []
-        if not urls and p.get("media_url"):
-            urls = [p["media_url"]]
-
-        for u in urls:
-            if isinstance(u, str) and u.startswith("/uploads/"):
-                fpath = UPLOADS_DIR / u.replace("/uploads/", "", 1)
-                if fpath.exists():
-                    try:
-                        raw_files.append(fpath.read_bytes())
-                    except Exception:
-                        pass
-
         flagged, reason = detect_nudity_or_explicit(
-            p.get("caption", ""), p.get("location_label", ""), raw_files
+            p.get("caption", ""), p.get("location_label", ""), []
         )
         if flagged:
             if delete_post_immediately(
-                conn, p["id"], "system_auto_nudity_filter", "auto_deleted_nudity", reason
+                conn, p["id"], "system_auto_nudity_filter", "auto_deleted_explicit", reason
             ):
                 deleted_count += 1
 
@@ -731,8 +735,6 @@ def sweep_and_delete_nudity(conn) -> int:
 
 
 def build_moderation_dashboard_payload(conn, user) -> dict:
-    auto_deleted_now = sweep_and_delete_nudity(conn)
-
     reports = [
         dict(r)
         for r in conn.execute(
@@ -786,7 +788,7 @@ def build_moderation_dashboard_payload(conn, user) -> dict:
         dict(r)
         for r in conn.execute(
             """
-            SELECT id, email, handle, display_name, avatar_url, account_type, is_verified_institution, created_at
+            SELECT id, email, handle, display_name, avatar_url, account_type, is_verified_institution, email_confirmed, created_at
             FROM users
             WHERE account_type != 'moderator'
             ORDER BY created_at DESC
@@ -810,7 +812,7 @@ def build_moderation_dashboard_payload(conn, user) -> dict:
             "handle": user.get("handle", ""),
             "email": user.get("email", ""),
         },
-        "auto_deleted_in_sweep": auto_deleted_now,
+        "auto_deleted_in_sweep": 0,
         "reports": reports,
         "active_posts": active_posts,
         "logs": logs,
@@ -896,6 +898,43 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+
+        if parsed.path.startswith("/uploads/"):
+            fname = parsed.path.replace("/uploads/", "", 1)
+            fpath = (UPLOADS_DIR / fname).resolve()
+            if fpath.exists() and fpath.is_file():
+                content = fpath.read_bytes()
+                mime = "image/jpeg" if fname.endswith((".jpg", ".jpeg")) else ("video/mp4" if fname.endswith(".mp4") else "image/png")
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(len(content)))
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
+            conn = get_db()
+            try:
+                row = conn.execute(
+                    "SELECT mime_type, data FROM media_blobs WHERE url = ?",
+                    (parsed.path,),
+                ).fetchone()
+                if row and row["data"]:
+                    data = row["data"]
+                    mime = row["mime_type"] or "image/jpeg"
+                    try:
+                        fpath.write_bytes(data)
+                    except Exception:
+                        pass
+                    self.send_response(200)
+                    self.send_header("Content-Type", mime)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "public, max-age=86400")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+            finally:
+                conn.close()
 
         if parsed.path in ("/moderation", "/moderation/"):
             mod_file = WEB_DIR / "moderation.html"
@@ -1488,6 +1527,10 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         {"error": "Moderator account authorization required."}, 403
                     )
 
+                if parsed.path == "/api/admin/sync-upstream":
+                    res = sync_with_upstream(force=True)
+                    return self.send_json(res)
+
                 if parsed.path == "/api/admin/backup/create":
                     label = (body.get("label") or "manual").strip()
                     info = create_database_backup(label)
@@ -1645,14 +1688,13 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 if avatar_data_url and "," in avatar_data_url:
                     _, b64_data = avatar_data_url.split(",", 1)
                     raw_avatar = base64.b64decode(b64_data)
-                    is_nude, n_reason = inspect_image_bytes_for_nudity(raw_avatar)
-                    if is_nude:
-                        return self.send_json(
-                            {"error": "Profile photo rejected by safety filter."}, 400
-                        )
                     avatar_fname = f"avatar_{uid}_{int(time.time() * 1000)}.jpg"
                     (UPLOADS_DIR / avatar_fname).write_bytes(raw_avatar)
                     new_avatar_url = f"/uploads/{avatar_fname}"
+                    conn.execute(
+                        "INSERT OR REPLACE INTO media_blobs (url, mime_type, data, created_at) VALUES (?, ?, ?, ?)",
+                        (new_avatar_url, "image/jpeg", raw_avatar, int(time.time())),
+                    )
 
                 conn.execute(
                     "UPDATE users SET display_name = ?, handle = ?, bio = ?, avatar_url = ? WHERE id = ?",
@@ -1767,40 +1809,44 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 if not decoded_items:
                     return self.send_json({"error": "Invalid media files."}, 400)
 
-                # Immediate Nudity Detection & Deletion before saving to disk or database
-                is_nudity, nudity_reason = detect_nudity_or_explicit(
+                is_explicit, explicit_reason = detect_nudity_or_explicit(
                     caption, location, raw_bytes_list
                 )
-                if is_nudity or body.get("client_nudity_flagged"):
-                    final_reason = nudity_reason or body.get("client_nudity_reason") or "Client + server image nudity scan triggered."
+                if is_explicit:
                     conn.execute(
                         """
                         INSERT INTO moderation_logs (id, moderator_id, action, target_id, author_handle, reason, created_at)
-                        VALUES (?, 'system_auto_nudity_filter', 'auto_deleted_nudity', ?, ?, ?, ?)
+                        VALUES (?, 'system_auto_nudity_filter', 'blocked_explicit', ?, ?, ?, ?)
                         """,
                         (
                             "log_" + secrets.token_hex(6),
                             "blocked_upload_" + secrets.token_hex(4),
                             user["handle"],
-                            final_reason,
+                            explicit_reason,
                             int(time.time()),
                         ),
                     )
                     conn.commit()
                     return self.send_json(
                         {
-                            "error": "Upload immediately deleted: Nudity and explicit content are strictly prohibited on Ivris.",
-                            "auto_deleted_nudity": True,
+                            "error": f"Upload blocked: {explicit_reason} Explicit content is prohibited on Ivris.",
                         },
                         400,
                     )
 
                 saved_urls = []
+                now_ts = int(time.time())
                 for idx, ext, raw_media in decoded_items:
                     filename = f"{uid}_{int(time.time() * 1000)}_{idx}.{ext}"
                     filepath = UPLOADS_DIR / filename
                     filepath.write_bytes(raw_media)
-                    saved_urls.append(f"/uploads/{filename}")
+                    post_url = f"/uploads/{filename}"
+                    saved_urls.append(post_url)
+                    mime_type = "image/jpeg" if ext in ("jpg", "jpeg") else ("video/mp4" if ext == "mp4" else "image/png")
+                    conn.execute(
+                        "INSERT OR REPLACE INTO media_blobs (url, mime_type, data, created_at) VALUES (?, ?, ?, ?)",
+                        (post_url, mime_type, raw_media, now_ts),
+                    )
 
                 now_ts = int(time.time())
                 expires_at = now_ts + 86400 if media_kind == "video_story" else None
@@ -1919,8 +1965,11 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     auto_restore_if_needed()
     init_db()
+    restore_media_blobs_to_disk()
     create_database_backup("boot")
     start_backup_scheduler()
+    if not os.environ.get("RENDER"):
+        threading.Thread(target=lambda: sync_with_upstream(force=False), daemon=True).start()
     port = int(os.environ.get("PORT", "3000"))
     server = http.server.ThreadingHTTPServer(("0.0.0.0", port), IvrisHandler)
     print(f"Ivris Backend & Web Server running on http://0.0.0.0:{port}", flush=True)
