@@ -359,9 +359,56 @@
 
     const VERIFIED_SVG = `<svg class="w-3.5 h-3.5 text-sky-500 inline shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 2.8 3.6-.4.8 3.5 3.1 1.8-1.5 3.3 1.5 3.3-3.1 1.8-.8 3.5-3.6-.4L12 24l-2.4-2.8-3.6.4-.8-3.5-3.1-1.8 1.5-3.3-1.5-3.3 3.1-1.8.8-3.5 3.6.4L12 2zm-1.2 13.6l6-6-1.4-1.4-4.6 4.6-2.2-2.2-1.4 1.4 3.6 3.6z"/></svg>`;
 
+    function readCookieValue(name) {
+      const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+      return m ? decodeURIComponent(m[1]) : '';
+    }
+
+    function readStoredToken() {
+      const ls = localStorage.getItem('ivris_token') || '';
+      if (ls) return ls;
+      const ck = readCookieValue('ivris_client_token');
+      if (ck) {
+        try { localStorage.setItem('ivris_token', ck); } catch (_e) {}
+        return ck;
+      }
+      return '';
+    }
+
+    function readCachedUser() {
+      try {
+        const raw = localStorage.getItem('ivris_cached_user');
+        return raw ? JSON.parse(raw) : null;
+      } catch (_e) {
+        return null;
+      }
+    }
+
+    function persistAuthSession(token, user) {
+      if (token) {
+        appState.token = token;
+        try { localStorage.setItem('ivris_token', token); } catch (_e) {}
+        document.cookie = `ivris_client_token=${encodeURIComponent(token)}; max-age=31536000; path=/; SameSite=Lax`;
+      }
+      if (user) {
+        appState.user = user;
+        try { localStorage.setItem('ivris_cached_user', JSON.stringify(user)); } catch (_e) {}
+      }
+    }
+
+    function clearAuthSession() {
+      appState.token = '';
+      appState.user = null;
+      try {
+        localStorage.removeItem('ivris_token');
+        localStorage.removeItem('ivris_cached_user');
+      } catch (_e) {}
+      document.cookie = 'ivris_client_token=; max-age=0; path=/; SameSite=Lax';
+    }
+
     const appState = {
-      token: localStorage.getItem('ivris_token') || '',
-      user: null,
+      token: readStoredToken(),
+      user: readCachedUser(),
       isSignUp: false,
       pendingConfirmEmail: '',
       pendingConfirmCodePreview: '',
@@ -403,10 +450,13 @@
 
     async function apiFetch(path, options = {}) {
       const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+      if (!appState.token) {
+        appState.token = readStoredToken();
+      }
       if (appState.token) {
         headers['Authorization'] = `Bearer ${appState.token}`;
       }
-      const res = await fetch(path, { ...options, headers });
+      const res = await fetch(path, { credentials: 'same-origin', ...options, headers });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Request failed');
@@ -415,21 +465,14 @@
     }
 
     async function loadLiveData() {
-      if (!appState.token) {
-        appState.user = null;
-        render();
-        return;
-      }
       try {
         const data = await apiFetch('/api/state');
         if (!data.user) {
-          appState.token = '';
-          localStorage.removeItem('ivris_token');
-          appState.user = null;
+          clearAuthSession();
           render();
           return;
         }
-        appState.user = data.user;
+        persistAuthSession(data.token || appState.token, data.user);
         appState.connections = data.connections || [];
         appState.seenPostIds = data.seenPostIds || [];
         appState.feedPosts = data.feedPosts || [];
@@ -504,8 +547,7 @@
           return;
         }
 
-        appState.token = res.token;
-        localStorage.setItem('ivris_token', res.token);
+        persistAuthSession(res.token, null);
         await loadLiveData();
       } catch (err) {
         appState.authError = err.message;
@@ -529,8 +571,7 @@
         appState.pendingConfirmEmail = '';
         appState.pendingConfirmCodePreview = '';
         appState.draftConfirmCode = '';
-        appState.token = res.token;
-        localStorage.setItem('ivris_token', res.token);
+        persistAuthSession(res.token, null);
         await loadLiveData();
       } catch (err) {
         appState.authError = err.message;
@@ -538,11 +579,12 @@
       }
     }
 
-    function signOut() {
-      appState.token = '';
-      appState.user = null;
+    async function signOut() {
+      try {
+        await fetch('/api/signout', { method: 'POST', credentials: 'same-origin' });
+      } catch (_e) {}
+      clearAuthSession();
       appState.screen = 'main';
-      localStorage.removeItem('ivris_token');
       render();
     }
 
@@ -2050,7 +2092,7 @@
           s: (data.stories || []).map(p => p.id),
           c: (data.connections || []).map(c => c.id + ':' + c.status),
         });
-        appState.user = data.user;
+        persistAuthSession(data.token || appState.token, data.user);
         appState.connections = data.connections || [];
         appState.seenPostIds = data.seenPostIds || [];
         appState.feedPosts = data.feedPosts || [];
@@ -2070,6 +2112,9 @@
       if (document.visibilityState === 'visible') pollLiveStateSilently();
     });
 
+    if (appState.user) {
+      render();
+    }
     loadLiveData();
   </script>
 </body>

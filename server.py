@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import base64
 import hashlib
+import hmac
+import http.cookies
 import http.server
 import io
 import json
@@ -29,6 +31,9 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_MOD_EMAIL = os.environ.get("IVRIS_MOD_EMAIL", "moderator@ivris.app")
 DEFAULT_MOD_HANDLE = os.environ.get("IVRIS_MOD_HANDLE", "moderator")
 DEFAULT_MOD_PASSWORD = os.environ.get("IVRIS_MOD_PASSWORD", "IvrisMod2026!")
+TOKEN_SIGNING_SECRET = os.environ.get(
+    "IVRIS_TOKEN_SECRET", "ivris_persistent_session_signing_key_2026"
+)
 
 DEFAULT_SETTINGS = {
     "read_receipts": True,
@@ -47,6 +52,91 @@ EXPLICIT_NUDITY_PATTERN = re.compile(
 
 def hash_pw(password: str) -> str:
     return hashlib.sha256(("ivris_salt_" + password).encode("utf-8")).hexdigest()
+
+
+def create_session_token(user_row) -> str:
+    u = dict(user_row)
+    payload = {
+        "id": u["id"],
+        "email": u["email"],
+        "handle": u["handle"],
+        "display_name": u["display_name"],
+        "bio": u.get("bio") or "",
+        "account_type": u.get("account_type") or "personal",
+        "is_verified_institution": int(u.get("is_verified_institution") or 0),
+        "password_hash": u["password_hash"],
+        "iat": int(time.time()),
+    }
+    raw_json = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    b64_payload = base64.urlsafe_b64encode(raw_json).decode("ascii").rstrip("=")
+    sig = hmac.new(
+        TOKEN_SIGNING_SECRET.encode("utf-8"),
+        b64_payload.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"ivs1.{b64_payload}.{sig}"
+
+
+def verify_and_restore_session_token(conn, token: str):
+    if not token or not token.startswith("ivs1."):
+        return None
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    _, b64_payload, sig = parts
+    expected_sig = hmac.new(
+        TOKEN_SIGNING_SECRET.encode("utf-8"),
+        b64_payload.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(sig, expected_sig):
+        return None
+    try:
+        padded = b64_payload + "=" * (-len(b64_payload) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return None
+
+    uid = payload.get("id")
+    email = payload.get("email")
+    handle = payload.get("handle")
+    if not uid or not email or not handle:
+        return None
+
+    user_row = conn.execute(
+        "SELECT * FROM users WHERE id = ? OR email = ? OR handle = ?",
+        (uid, email, handle),
+    ).fetchone()
+
+    if not user_row:
+        conn.execute(
+            """
+            INSERT INTO users (id, email, password_hash, handle, display_name, bio, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?)
+            """,
+            (
+                uid,
+                email,
+                payload.get("password_hash") or hash_pw(secrets.token_hex(8)),
+                handle,
+                payload.get("display_name") or handle,
+                payload.get("bio") or "",
+                payload.get("account_type") or "personal",
+                int(payload.get("is_verified_institution") or 0),
+                json.dumps(DEFAULT_SETTINGS),
+                int(payload.get("iat") or time.time()),
+            ),
+        )
+        user_row = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+
+    if user_row:
+        conn.execute(
+            "INSERT OR IGNORE INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
+            (token, user_row["id"], int(time.time())),
+        )
+        conn.commit()
+        return dict(user_row)
+    return None
 
 
 def get_db():
@@ -424,19 +514,35 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
-    def send_json(self, payload: dict, status: int = 200):
+    def send_json(self, payload: dict, status: int = 200, extra_headers: dict | None = None):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
     def get_current_user(self, conn):
+        token = ""
         auth = self.headers.get("Authorization", "")
-        if not auth.startswith("Bearer "):
+        if auth.startswith("Bearer "):
+            token = auth.replace("Bearer ", "").strip()
+        if not token:
+            cookie_header = self.headers.get("Cookie", "")
+            if cookie_header:
+                try:
+                    c = http.cookies.SimpleCookie()
+                    c.load(cookie_header)
+                    if "ivris_session" in c:
+                        token = c["ivris_session"].value
+                except Exception:
+                    pass
+        if not token:
             return None
-        token = auth.replace("Bearer ", "").strip()
+
         row = conn.execute(
             """
             SELECT u.* FROM sessions s
@@ -445,7 +551,11 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
             """,
             (token,),
         ).fetchone()
-        return dict(row) if row else None
+        if row:
+            return dict(row)
+
+        # Fallback: verify HMAC-signed persistent session token across server restarts/deploys
+        return verify_and_restore_session_token(conn, token)
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -668,8 +778,15 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     ).fetchone()["c"]
                     other_users.append(u_dict)
 
+                refreshed_token = create_session_token(user)
+                conn.execute(
+                    "INSERT OR IGNORE INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
+                    (refreshed_token, uid, now_ts),
+                )
+                conn.commit()
                 return self.send_json(
                     {
+                        "token": refreshed_token,
                         "user": {
                             "id": user["id"],
                             "email": user["email"],
@@ -687,7 +804,10 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         "myStories": my_stories,
                         "stories": stories,
                         "allProfiles": other_users,
-                    }
+                    },
+                    extra_headers={
+                        "Set-Cookie": f"ivris_session={refreshed_token}; Max-Age=31536000; Path=/; SameSite=Lax; HttpOnly"
+                    },
                 )
             finally:
                 conn.close()
@@ -858,13 +978,19 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     "UPDATE users SET email_confirmed = 1, verification_code = '' WHERE id = ?",
                     (user["id"],),
                 )
-                token = secrets.token_hex(24)
+                updated_user = conn.execute(
+                    "SELECT * FROM users WHERE id = ?", (user["id"],)
+                ).fetchone()
+                token = create_session_token(updated_user)
                 conn.execute(
-                    "INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
+                    "INSERT OR REPLACE INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
                     (token, user["id"], int(time.time())),
                 )
                 conn.commit()
-                return self.send_json({"token": token})
+                cookie_val = f"ivris_session={token}; Max-Age=31536000; Path=/; SameSite=Lax; HttpOnly"
+                return self.send_json(
+                    {"token": token}, extra_headers={"Set-Cookie": cookie_val}
+                )
 
             if parsed.path == "/api/signin":
                 identifier = (body.get("email") or "").strip().lower()
@@ -904,18 +1030,35 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         }
                     )
 
-                token = secrets.token_hex(24)
+                token = create_session_token(user)
                 conn.execute(
-                    "INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
+                    "INSERT OR REPLACE INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
                     (token, user["id"], int(time.time())),
                 )
                 conn.commit()
+                cookie_val = f"ivris_session={token}; Max-Age=31536000; Path=/; SameSite=Lax; HttpOnly"
                 return self.send_json(
                     {
                         "token": token,
                         "account_type": user["account_type"],
                         "handle": user["handle"],
-                    }
+                    },
+                    extra_headers={"Set-Cookie": cookie_val},
+                )
+
+            if parsed.path == "/api/signout":
+                auth = self.headers.get("Authorization", "")
+                if auth.startswith("Bearer "):
+                    tok = auth.replace("Bearer ", "").strip()
+                    conn.execute("DELETE FROM sessions WHERE token = ?", (tok,))
+                    conn.commit()
+                clear_cookie = "ivris_session=; Max-Age=0; Path=/; SameSite=Lax; HttpOnly"
+                return self.send_json(
+                    {"ok": True},
+                    extra_headers={
+                        "Set-Cookie": clear_cookie,
+                        "Clear-Site-Data": '"cookies", "storage"',
+                    },
                 )
 
             if parsed.path == "/api/institution-apply":
