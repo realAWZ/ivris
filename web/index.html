@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#000000" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
   <meta name="apple-mobile-web-app-title" content="Ivris" />
   <meta name="mobile-web-app-capable" content="yes" />
   <link rel="manifest" href="/manifest.json" />
@@ -76,28 +76,28 @@
       outline: 3px solid #38bdf8;
       outline-offset: 4px;
     }
-    /* iPhone Dynamic Island / Status Bar & Home Indicator Safe Areas */
+    /* iPhone Dynamic Island / Status Bar & Bottom Bar Spacing */
     .safe-top-header {
-      padding-top: max(calc(env(safe-area-inset-top, 0px) + 12px), 16px);
-      padding-bottom: 12px;
+      padding-top: 14px;
+      padding-bottom: 10px;
     }
     .safe-bottom-nav {
-      padding-top: 8px;
-      padding-bottom: max(calc(env(safe-area-inset-bottom, 0px) + 12px), 16px);
+      padding-top: 6px;
+      padding-bottom: 6px;
     }
     @media (display-mode: standalone), (pointer: coarse) {
       .safe-top-header {
-        padding-top: max(calc(env(safe-area-inset-top, 50px) + 8px), 56px);
-        padding-bottom: 12px;
+        padding-top: max(calc(env(safe-area-inset-top, 59px) + 12px), 68px);
+        padding-bottom: 10px;
       }
       .safe-bottom-nav {
-        padding-top: 10px;
-        padding-bottom: max(calc(env(safe-area-inset-bottom, 28px) + 10px), 34px);
+        padding-top: 6px;
+        padding-bottom: 6px;
       }
     }
     /* Accessible Target Sizes (per modern-web-guidance: accessibility) */
     .nav-touch-target {
-      min-block-size: 44px;
+      min-block-size: 38px;
       min-inline-size: 44px;
       display: inline-flex;
       align-items: center;
@@ -105,8 +105,8 @@
     }
     @media (pointer: coarse) {
       .nav-touch-target {
-        min-block-size: 48px;
-        min-inline-size: 54px;
+        min-block-size: 40px;
+        min-inline-size: 48px;
       }
     }
   </style>
@@ -1177,7 +1177,7 @@
       let headerHtml = '';
       if (appState.screen === 'settings') {
         headerHtml = `
-          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black z-20">
             <button onclick="navigate('profile')" class="nav-touch-target text-sm font-semibold flex items-center gap-1 -ml-2">
               <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
               <span>Profile</span>
@@ -1188,7 +1188,7 @@
         `;
       } else if (appState.screen === 'profile') {
         headerHtml = `
-          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black z-20">
             <h1 id="screen-heading" tabindex="-1" class="text-xl font-bold focus:outline-none">${escapeAttr(appState.user.handle)}</h1>
             <div class="flex items-center gap-2 -mr-2">
               <button onclick="openComposeWithKind('photo_post')" aria-label="Create post" class="nav-touch-target">
@@ -1203,7 +1203,7 @@
       } else if (['messages', 'chat', 'myPost'].includes(appState.screen)) {
         const backTarget = appState.screen === 'myPost' ? 'profile' : (appState.screen === 'chat' ? 'messages' : 'main');
         headerHtml = `
-          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black z-20">
             <button onclick="navigate('${backTarget}')" class="nav-touch-target text-sm font-semibold flex items-center gap-1 -ml-2">
               <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
               <span>Back</span>
@@ -1216,14 +1216,14 @@
         `;
       } else {
         headerHtml = `
-          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black/95 backdrop-blur z-20">
+          <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black z-20">
             <h1 id="screen-heading" tabindex="-1" class="text-[26px] font-bold tracking-tight focus:outline-none leading-none" style="font-family: Georgia, serif;">Ivris</h1>
             <div class="flex items-center gap-2 -mr-2">
               <button onclick="navigate('search', 'requests')" aria-label="Requests" class="nav-touch-target relative">
                 <svg class="w-[26px] h-[26px]" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
                 </svg>
-                ${incomingReqs > 0 ? `<span class="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-[#ff3040]"></span>` : ''}
+                ${incomingReqs > 0 ? `<span class="absolute top-1.5 right-2 w-2.5 h-2.5 rounded-full bg-[#ff3040]"></span>` : ''}
               </button>
               <button onclick="navigate('messages')" aria-label="Direct Messages" class="nav-touch-target">
                 <svg class="w-[26px] h-[26px]" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24">
@@ -1706,7 +1706,7 @@
       }
 
       const footerNav = `
-        <nav aria-label="Bottom Navigation" class="px-6 safe-bottom-nav border-t border-zinc-900 flex items-center justify-between sticky bottom-0 bg-black/95 backdrop-blur z-20">
+        <nav aria-label="Bottom Navigation" class="px-6 safe-bottom-nav border-t border-zinc-900 flex items-center justify-between sticky bottom-0 bg-black z-20">
           <button onclick="navigate('main')" aria-label="Home" class="nav-touch-target ${appState.screen === 'main' ? 'opacity-100' : 'opacity-50'}">
             <svg class="w-7 h-7" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1v-9.5z"/></svg>
           </button>
