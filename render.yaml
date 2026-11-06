@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: ivris
+    runtime: python
+    plan: free
+    buildCommand: "echo 'Build complete'"
+    startCommand: "python3 server.py"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0

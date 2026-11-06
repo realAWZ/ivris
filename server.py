@@ -812,6 +812,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     init_db()
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", 3000), IvrisHandler)
-    print("Ivris Backend & Web Server running on http://0.0.0.0:3000", flush=True)
+    port = int(os.environ.get("PORT", "3000"))
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", port), IvrisHandler)
+    print(f"Ivris Backend & Web Server running on http://0.0.0.0:{port}", flush=True)
     server.serve_forever()
