@@ -116,7 +116,7 @@
   </div>
 
   <!-- New Post (Up to 15 Photos) / Story Modal (Light-Dismiss enabled via closedby="any") -->
-  <dialog id="compose-dialog" closedby="any" aria-labelledby="compose-dialog-title" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
+  <dialog id="compose-dialog" closedby="any" aria-labelledby="compose-dialog-title" onclose="stopPreviewAudio()" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
     <div class="space-y-4">
       <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
         <h3 id="compose-dialog-title" class="text-sm font-semibold">New Share</h3>
@@ -154,17 +154,35 @@
             <span class="text-zinc-400">Search songs ›</span>
           </button>
 
-          <div id="selected-music-pill" class="hidden p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-between gap-2.5">
-            <div class="flex items-center gap-2.5 min-w-0">
-              <img id="selected-music-art" src="" alt="Album art" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" />
-              <div class="min-w-0">
-                <p id="selected-music-title" class="text-xs font-semibold truncate text-white"></p>
-                <p id="selected-music-artist" class="text-xs text-zinc-400 truncate"></p>
+          <div id="selected-music-pill" class="hidden p-3 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2.5">
+            <div class="flex items-center justify-between gap-2.5">
+              <div class="flex items-center gap-2.5 min-w-0">
+                <img id="selected-music-art" src="" alt="Album art" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" />
+                <div class="min-w-0">
+                  <p id="selected-music-title" class="text-xs font-semibold truncate text-white"></p>
+                  <p id="selected-music-artist" class="text-xs text-zinc-400 truncate"></p>
+                </div>
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button type="button" onclick="openMusicPickerModal()" class="px-2 py-1 rounded-lg bg-zinc-800 text-xs text-zinc-300 hover:text-white">Change</button>
+                <button type="button" onclick="clearSelectedMusic()" aria-label="Remove song" class="w-7 h-7 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white flex items-center justify-center text-xs">✕</button>
               </div>
             </div>
-            <div class="flex items-center gap-1.5 shrink-0">
-              <button type="button" onclick="openMusicPickerModal()" class="px-2 py-1 rounded-lg bg-zinc-800 text-xs text-zinc-300 hover:text-white">Change</button>
-              <button type="button" onclick="clearSelectedMusic()" aria-label="Remove song" class="w-7 h-7 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white flex items-center justify-center text-xs">✕</button>
+            <div class="pt-1 border-t border-zinc-900 space-y-1">
+              <label for="music-start-slider" class="flex items-center justify-between text-xs text-zinc-400">
+                <span>Choose where song starts</span>
+                <span id="music-start-label" class="font-semibold text-sky-400">0:00</span>
+              </label>
+              <input
+                id="music-start-slider"
+                type="range"
+                min="0"
+                max="24"
+                step="1"
+                value="0"
+                oninput="handleMusicStartChange(this.value)"
+                class="w-full accent-sky-500 cursor-pointer"
+              />
             </div>
           </div>
         </div>
@@ -353,7 +371,7 @@
       draftName: '',
       draftConfirmCode: '',
       authError: '',
-      screen: 'main', // 'main' | 'search' | 'profile' | 'settings' | 'messages' | 'chat' | 'myPost'
+      screen: 'main', // 'main' | 'search' | 'profile' | 'settings' | 'messages' | 'chat' | 'myPost' | 'userProfile' | 'userPost'
       searchTab: 'accounts', // 'accounts' | 'institutions' | 'requests'
       searchQuery: '',
       composeKind: 'photo_post',
@@ -368,6 +386,9 @@
       carouselIndexes: {},
       activeChatPartner: null,
       selectedMyPost: null,
+      selectedUserProfile: null,
+      selectedUserPost: null,
+      userProfileBackScreen: 'search',
       selectedMusic: null,
       musicResults: [],
       playingPostId: null,
@@ -375,6 +396,9 @@
     };
 
     let activeAudioEl = null;
+    let activeAutoPostId = null;
+    let activeAutoStartSec = 0;
+    let feedMusicObserver = null;
     let musicSearchTimer = null;
 
     async function apiFetch(path, options = {}) {
@@ -666,6 +690,11 @@
       }
     }
 
+    function formatMusicSeconds(sec) {
+      const s = Math.max(0, Math.min(29, Math.floor(Number(sec) || 0)));
+      return `0:${s < 10 ? '0' + s : s}`;
+    }
+
     function syncSelectedMusicUI() {
       const triggerBtn = document.getElementById('add-music-trigger-btn');
       const pill = document.getElementById('selected-music-pill');
@@ -676,14 +705,36 @@
         document.getElementById('selected-music-art').src = appState.selectedMusic.artwork_url || '';
         document.getElementById('selected-music-title').textContent = appState.selectedMusic.title || '';
         document.getElementById('selected-music-artist').textContent = appState.selectedMusic.artist || '';
+        const startSec = Number(appState.selectedMusic.start_time || 0);
+        const slider = document.getElementById('music-start-slider');
+        const label = document.getElementById('music-start-label');
+        if (slider) slider.value = String(startSec);
+        if (label) label.textContent = formatMusicSeconds(startSec);
       } else {
         triggerBtn.classList.remove('hidden');
         pill.classList.add('hidden');
       }
     }
 
+    function handleMusicStartChange(val) {
+      const startSec = Math.max(0, Math.min(24, Number(val) || 0));
+      const label = document.getElementById('music-start-label');
+      if (label) label.textContent = formatMusicSeconds(startSec);
+      if (!appState.selectedMusic) return;
+      appState.selectedMusic.start_time = startSec;
+      if (appState.selectedMusic.preview_url) {
+        if (!activeAudioEl || activeAudioEl.src !== appState.selectedMusic.preview_url) {
+          stopPreviewAudio();
+          activeAudioEl = new Audio(appState.selectedMusic.preview_url);
+        }
+        activeAudioEl.currentTime = startSec;
+        activeAudioEl.play().catch(() => {});
+      }
+    }
+
     function clearSelectedMusic() {
       appState.selectedMusic = null;
+      stopPreviewAudio();
       syncSelectedMusicUI();
     }
 
@@ -692,6 +743,7 @@
         activeAudioEl.pause();
         activeAudioEl = null;
       }
+      activeAutoPostId = null;
       appState.previewingTrackId = null;
       appState.playingPostId = null;
     }
@@ -809,45 +861,89 @@
         title: track.title,
         artist: track.artist,
         artwork_url: track.artwork_url,
-        preview_url: track.preview_url
+        preview_url: track.preview_url,
+        start_time: 0
       };
       stopPreviewAudio();
       syncSelectedMusicUI();
       document.getElementById('music-picker-dialog').close();
+      handleMusicStartChange(0);
     }
 
-    function togglePostMusic(postId, previewUrl) {
-      if (!previewUrl) return;
-      const inlineAudio = document.getElementById(`post-audio-${postId}`);
-      if (inlineAudio) {
-        if (!inlineAudio.paused) {
-          inlineAudio.pause();
-          appState.playingPostId = null;
-        } else {
-          document.querySelectorAll('audio').forEach(a => {
-            if (a !== inlineAudio) a.pause();
-          });
-          if (activeAudioEl) activeAudioEl.pause();
-          inlineAudio.play().catch(() => {});
-          appState.playingPostId = postId;
-        }
-        render();
+    function startAutoPostAudio(post) {
+      if (!post || !post.music || !post.music.preview_url) {
+        stopPreviewAudio();
         return;
       }
-      if (appState.playingPostId === postId && activeAudioEl) {
-        stopPreviewAudio();
-        render();
+      const startSec = Math.max(0, Math.min(24, Number(post.music.start_time || 0)));
+      if (activeAutoPostId === post.id && activeAudioEl && !activeAudioEl.paused) {
         return;
       }
       stopPreviewAudio();
-      activeAudioEl = new Audio(previewUrl);
-      appState.playingPostId = postId;
-      activeAudioEl.onended = () => {
-        appState.playingPostId = null;
-        render();
+      activeAutoPostId = post.id;
+      activeAutoStartSec = startSec;
+      appState.playingPostId = post.id;
+      const audio = new Audio(post.music.preview_url);
+      activeAudioEl = audio;
+      const seekAndPlay = () => {
+        try {
+          audio.currentTime = startSec;
+        } catch (_e) {}
+        audio.play().catch(() => {});
       };
-      activeAudioEl.play().catch(() => {});
-      render();
+      if (audio.readyState >= 1) {
+        seekAndPlay();
+      } else {
+        audio.addEventListener('loadedmetadata', seekAndPlay, { once: true });
+      }
+      audio.onended = () => {
+        if (activeAutoPostId === post.id && activeAudioEl === audio) {
+          try {
+            audio.currentTime = activeAutoStartSec;
+            audio.play().catch(() => {});
+          } catch (_e) {}
+        }
+      };
+    }
+
+    function syncAutoPostMusic() {
+      if (feedMusicObserver) {
+        feedMusicObserver.disconnect();
+        feedMusicObserver = null;
+      }
+      if (appState.screen === 'myPost' && appState.selectedMyPost) {
+        startAutoPostAudio(appState.selectedMyPost);
+        return;
+      }
+      if (appState.screen === 'userPost' && appState.selectedUserPost) {
+        startAutoPostAudio(appState.selectedUserPost);
+        return;
+      }
+      if (appState.screen === 'main') {
+        const articles = document.querySelectorAll('article[data-music-post-id]');
+        if (!articles.length) {
+          stopPreviewAudio();
+          return;
+        }
+        feedMusicObserver = new IntersectionObserver((entries) => {
+          let bestEntry = null;
+          for (const entry of entries) {
+            if (entry.isIntersecting && entry.intersectionRatio >= 0.55) {
+              if (!bestEntry || entry.intersectionRatio > bestEntry.intersectionRatio) {
+                bestEntry = entry;
+              }
+            }
+          }
+          if (bestEntry) {
+            const pid = bestEntry.target.getAttribute('data-music-post-id');
+            const post = appState.feedPosts.find(p => p.id === pid);
+            if (post) startAutoPostAudio(post);
+          }
+        }, { threshold: [0.55, 0.75] });
+        articles.forEach(a => feedMusicObserver.observe(a));
+        return;
+      }
+      stopPreviewAudio();
     }
 
     async function handleFileSelectionPreview() {
@@ -1018,6 +1114,28 @@
       navigate('myPost');
     }
 
+    function openUserProfile(userId) {
+      if (!userId) return;
+      if (appState.user && userId === appState.user.id) {
+        navigate('profile');
+        return;
+      }
+      const prof = appState.allProfiles.find(p => p.id === userId);
+      if (!prof) return;
+      if (!['userProfile', 'userPost'].includes(appState.screen)) {
+        appState.userProfileBackScreen = appState.screen || 'search';
+      }
+      appState.selectedUserProfile = prof;
+      navigate('userProfile');
+    }
+
+    function openUserPost(postId) {
+      const post = appState.feedPosts.find(p => p.id === postId);
+      if (!post) return;
+      appState.selectedUserPost = post;
+      navigate('userPost');
+    }
+
     function escapeAttr(str) {
       return String(str || '').replace(/"/g, '&quot;');
     }
@@ -1027,8 +1145,6 @@
       const total = urls.length;
       const idx = Math.min(appState.carouselIndexes[post.id] || 0, total - 1);
       const currentUrl = urls[idx];
-      const hasMusic = post.music && post.music.preview_url;
-      const isPlaying = appState.playingPostId === post.id;
 
       return `
         <div class="relative w-full aspect-[4/5] bg-zinc-900 overflow-hidden">
@@ -1044,40 +1160,7 @@
               ›
             </button>
           ` : ''}
-          ${hasMusic ? `
-            <button
-              type="button"
-              onclick="togglePostMusic('${post.id}', '${escapeAttr(post.music.preview_url)}')"
-              aria-label="${isPlaying ? 'Pause song' : 'Play song'}"
-              class="absolute bottom-3 right-3 w-8 h-8 rounded-full bg-black/75 backdrop-blur text-white flex items-center justify-center shadow-lg"
-            >
-              ${isPlaying ? `
-                <svg class="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"/>
-                </svg>
-              ` : `
-                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
-                </svg>
-              `}
-            </button>
-          ` : ''}
         </div>
-        ${hasMusic ? `
-          <div class="px-3.5 pt-2">
-            <audio
-              id="post-audio-${post.id}"
-              controls
-              loading="lazy"
-              preload="none"
-              src="${escapeAttr(post.music.preview_url)}"
-              onplay="appState.playingPostId='${post.id}'"
-              onpause="if(appState.playingPostId==='${post.id}')appState.playingPostId=null"
-              onended="if(appState.playingPostId==='${post.id}'){appState.playingPostId=null;render();}"
-              class="w-full h-8"
-            ></audio>
-          </div>
-        ` : ''}
       `;
     }
 
@@ -1199,8 +1282,23 @@
             </div>
           </header>
         `;
-      } else if (['messages', 'chat', 'myPost'].includes(appState.screen)) {
-        const backTarget = appState.screen === 'myPost' ? 'profile' : (appState.screen === 'chat' ? 'messages' : 'main');
+      } else if (['messages', 'chat', 'myPost', 'userProfile', 'userPost'].includes(appState.screen)) {
+        const backTarget = appState.screen === 'myPost'
+          ? 'profile'
+          : appState.screen === 'userPost'
+          ? 'userProfile'
+          : appState.screen === 'userProfile'
+          ? (appState.userProfileBackScreen || 'search')
+          : appState.screen === 'chat'
+          ? 'messages'
+          : 'main';
+        const headingText = appState.screen === 'myPost' || appState.screen === 'userPost'
+          ? 'Post'
+          : appState.screen === 'userProfile'
+          ? escapeAttr(appState.selectedUserProfile?.handle || 'Profile')
+          : appState.screen === 'chat'
+          ? escapeAttr(appState.activeChatPartner?.display_name || 'Chat')
+          : 'Messages';
         headerHtml = `
           <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black z-20">
             <button onclick="navigate('${backTarget}')" class="nav-touch-target text-sm font-semibold flex items-center gap-1 -ml-2">
@@ -1208,7 +1306,7 @@
               <span>Back</span>
             </button>
             <h1 id="screen-heading" tabindex="-1" class="text-base font-bold focus:outline-none">
-              ${appState.screen === 'myPost' ? 'Post' : (appState.screen === 'chat' ? escapeAttr(appState.activeChatPartner?.display_name || 'Chat') : 'Messages')}
+              ${headingText}
             </h1>
             <div class="w-12"></div>
           </header>
@@ -1292,20 +1390,20 @@
           const curIdx = Math.min(appState.carouselIndexes[post.id] || 0, urls.length - 1);
 
           return `
-            <article class="border-b border-zinc-900 pb-3">
+            <article ${post.music && post.music.preview_url ? `data-music-post-id="${post.id}"` : ''} class="border-b border-zinc-900 pb-3">
               <div class="px-3.5 py-2.5 flex items-center justify-between">
                 <div class="min-w-0">
-                  <div class="flex items-center gap-1">
+                  <button type="button" onclick="openUserProfile('${post.author_id}')" class="flex items-center gap-1 text-left hover:opacity-80">
                     <span class="text-xs font-semibold">${post.handle}</span>
                     ${post.is_verified_institution ? VERIFIED_SVG : ''}
-                  </div>
+                  </button>
                   ${post.music && post.music.title ? `
-                    <button type="button" onclick="togglePostMusic('${post.id}', '${escapeAttr(post.music.preview_url)}')" class="flex items-center gap-1 text-xs text-zinc-300 hover:text-white truncate max-w-[260px]">
+                    <div class="flex items-center gap-1 text-xs text-zinc-300 truncate max-w-[260px]">
                       <svg class="w-3 h-3 text-sky-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
                       </svg>
                       <span class="truncate">${escapeAttr(post.music.artist)} · ${escapeAttr(post.music.title)}</span>
-                    </button>
+                    </div>
                   ` : (post.location_label ? `<p class="text-xs text-zinc-400">${post.location_label}</p>` : '')}
                 </div>
                 <button onclick="markPostSeen('${post.id}')" class="text-xs text-zinc-400 shrink-0">Done</button>
@@ -1339,7 +1437,7 @@
 
               <div class="px-3.5">
                 <p class="text-xs leading-relaxed">
-                  <span class="font-semibold mr-1.5">${post.handle}</span>${post.caption || ''}
+                  <button type="button" onclick="openUserProfile('${post.author_id}')" class="font-semibold mr-1.5 hover:underline">${post.handle}</button>${post.caption || ''}
                 </p>
               </div>
             </article>
@@ -1401,7 +1499,7 @@
 
                 return `
                   <div class="py-3 px-4 flex items-center justify-between gap-3">
-                    <div class="flex items-center gap-3 min-w-0">
+                    <button type="button" onclick="openUserProfile('${item.id}')" class="flex items-center gap-3 min-w-0 flex-1 text-left hover:opacity-85">
                       <div class="w-11 h-11 rounded-full bg-zinc-900 flex items-center justify-center font-semibold text-xs shrink-0">
                         ${item.handle.slice(0, 2).toUpperCase()}
                       </div>
@@ -1412,7 +1510,7 @@
                         </div>
                         <p class="text-xs text-zinc-400 truncate">${item.display_name}</p>
                       </div>
-                    </div>
+                    </button>
                     <button onclick="handleConnectionClick('${item.id}')" class="h-8 px-4 rounded-lg bg-sky-500 text-white text-xs font-semibold whitespace-nowrap shrink-0">
                       ${label}
                     </button>
@@ -1700,6 +1798,152 @@
             </div>
           </article>
         `;
+      } else if (appState.screen === 'userProfile' && appState.selectedUserProfile) {
+        const prof = appState.allProfiles.find(u => u.id === appState.selectedUserProfile.id) || appState.selectedUserProfile;
+        appState.selectedUserProfile = prof;
+        const conn = appState.connections.find(c =>
+          (c.requester_id === uid && c.addressee_id === prof.id) ||
+          (c.requester_id === prof.id && c.addressee_id === uid)
+        );
+        const isConnected = (conn && conn.status === 'accepted') || Boolean(prof.is_verified_institution);
+        const connLabel = !conn
+          ? (prof.account_type === 'institution' ? 'Follow' : 'Add')
+          : conn.status === 'accepted'
+          ? 'Connected'
+          : conn.addressee_id === uid
+          ? 'Accept'
+          : 'Requested';
+
+        const userPosts = appState.feedPosts.filter(p => p.author_id === prof.id);
+        const postsCount = isConnected ? userPosts.length : (prof.posts_count ?? 0);
+        const friendsCount = prof.friends_count ?? 0;
+
+        bodyHtml = `
+          <div class="space-y-4 pt-4">
+            <div class="px-4 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center text-base font-bold">
+                  ${(prof.handle || 'U').slice(0, 2).toUpperCase()}
+                </div>
+                <div class="flex items-center gap-6 pr-4 text-center">
+                  <div>
+                    <div class="text-sm font-bold">${postsCount}</div>
+                    <div class="text-xs text-zinc-400">posts</div>
+                  </div>
+                  <div>
+                    <div class="text-sm font-bold">${friendsCount}</div>
+                    <div class="text-xs text-zinc-400">friends</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="space-y-0.5">
+                <div class="flex items-center gap-1">
+                  <p class="text-xs font-bold">${escapeAttr(prof.display_name)}</p>
+                  ${prof.is_verified_institution ? VERIFIED_SVG : ''}
+                </div>
+                ${prof.bio ? `<p class="text-xs text-zinc-300 leading-relaxed">${escapeAttr(prof.bio)}</p>` : ''}
+              </div>
+
+              <div class="grid ${isConnected ? 'grid-cols-2' : 'grid-cols-1'} gap-2">
+                <button onclick="handleConnectionClick('${prof.id}')" class="h-8 rounded-lg ${isConnected ? 'bg-zinc-900 text-white' : 'bg-sky-500 text-white'} text-xs font-semibold">
+                  ${connLabel}
+                </button>
+                ${isConnected ? `
+                  <button onclick="openChat('${prof.id}')" class="h-8 rounded-lg bg-zinc-900 text-xs font-semibold">
+                    Message
+                  </button>
+                ` : ''}
+              </div>
+            </div>
+
+            ${isConnected ? `
+              ${userPosts.length === 0 ? `
+                <div class="border-t border-zinc-900 py-14 text-center text-xs text-zinc-500">
+                  No posts yet.
+                </div>
+              ` : `
+                <div class="border-t border-zinc-900 pt-0.5 grid grid-cols-3 gap-0.5">
+                  ${userPosts.map(p => {
+                    const count = (p.media_urls && p.media_urls.length) || 1;
+                    return `
+                      <button onclick="openUserPost('${p.id}')" class="aspect-square bg-zinc-900 overflow-hidden relative">
+                        <img src="${p.media_url}" alt="Post by ${escapeAttr(prof.handle)}" class="w-full h-full object-cover" />
+                        ${count > 1 ? `
+                          <span class="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/65 text-xs font-semibold text-white">
+                            1/${count}
+                          </span>
+                        ` : ''}
+                      </button>
+                    `;
+                  }).join('')}
+                </div>
+              `}
+            ` : `
+              <div class="border-t border-zinc-900 py-16 px-6 text-center space-y-1.5">
+                <p class="text-xs font-semibold text-white">This account is private</p>
+                <p class="text-xs text-zinc-400">Connect with @${escapeAttr(prof.handle)} to see their posts.</p>
+              </div>
+            `}
+          </div>
+        `;
+      } else if (appState.screen === 'userPost' && appState.selectedUserPost) {
+        const p = appState.feedPosts.find(item => item.id === appState.selectedUserPost.id) || appState.selectedUserPost;
+        appState.selectedUserPost = p;
+        const urls = (p.media_urls && p.media_urls.length > 0) ? p.media_urls : [p.media_url];
+        const curIdx = Math.min(appState.carouselIndexes[p.id] || 0, urls.length - 1);
+
+        bodyHtml = `
+          <article class="pb-6">
+            <div class="px-3.5 py-2.5 flex items-center justify-between border-b border-zinc-900">
+              <div class="min-w-0">
+                <button type="button" onclick="openUserProfile('${p.author_id}')" class="flex items-center gap-1 text-left">
+                  <span class="text-xs font-semibold">${escapeAttr(p.handle)}</span>
+                  ${p.is_verified_institution ? VERIFIED_SVG : ''}
+                </button>
+                ${p.music && p.music.title ? `
+                  <div class="flex items-center gap-1 text-xs text-zinc-300 truncate max-w-[260px]">
+                    <svg class="w-3 h-3 text-sky-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
+                    </svg>
+                    <span class="truncate">${escapeAttr(p.music.artist)} · ${escapeAttr(p.music.title)}</span>
+                  </div>
+                ` : (p.location_label ? `<p class="text-xs text-zinc-400">${escapeAttr(p.location_label)}</p>` : '')}
+              </div>
+            </div>
+
+            ${renderCarouselMedia(p)}
+
+            <!-- Action Bar: Like counts are never shown on other people's posts -->
+            <div class="px-3.5 pt-2.5 pb-1.5 flex items-center justify-between">
+              <div class="flex items-center gap-4">
+                <button onclick="toggleLike('${p.id}')">
+                  <svg class="w-6 h-6 ${p.likedByMe ? 'text-[#ff3040]' : ''}" fill="${p.likedByMe ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
+                  </svg>
+                </button>
+                <button onclick="openChat('${p.author_id}')">
+                  <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                  </svg>
+                </button>
+              </div>
+              ${urls.length > 1 ? `
+                <div class="flex gap-1">
+                  ${urls.map((_, dotIdx) => `
+                    <span class="w-1.5 h-1.5 rounded-full ${dotIdx === curIdx ? 'bg-sky-500' : 'bg-zinc-700'}"></span>
+                  `).join('')}
+                </div>
+              ` : '<div></div>'}
+            </div>
+
+            <div class="px-3.5">
+              <p class="text-xs leading-relaxed">
+                <span class="font-semibold mr-1.5">${escapeAttr(p.handle)}</span>${p.caption || ''}
+              </p>
+            </div>
+          </article>
+        `;
       }
 
       const isProfileTab = ['profile', 'settings', 'myPost'].includes(appState.screen);
@@ -1719,7 +1963,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
               </svg>
             </button>
-            <button onclick="navigate('search')" aria-label="Search" class="nav-pill-item ${appState.screen === 'search' ? 'bg-zinc-800 text-white' : 'text-zinc-300 opacity-75 hover:opacity-100'}">
+            <button onclick="navigate('search')" aria-label="Search" class="nav-pill-item ${['search', 'userProfile', 'userPost'].includes(appState.screen) ? 'bg-zinc-800 text-white' : 'text-zinc-300 opacity-75 hover:opacity-100'}">
               <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7.5"/><path stroke-linecap="round" d="M20 20l-3.8-3.8"/></svg>
             </button>
             <button onclick="navigate('profile')" aria-label="Profile" class="nav-pill-item ${isProfileTab ? 'bg-zinc-800 text-white' : 'text-zinc-300 opacity-85 hover:opacity-100'}">
@@ -1733,6 +1977,7 @@
 
       root.innerHTML = `${headerHtml}<main class="flex-1">${bodyHtml}</main>${footerNav}`;
       observeLazyMedia();
+      syncAutoPostMusic();
     }
 
     // Fallback for browsers without native <audio loading="lazy"> / <video loading="lazy"> (per modern-web-guidance: lazy-load-video-and-audio)
@@ -1783,6 +2028,47 @@
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
+
+    // Background live-sync so posts and connections from phone/computer appear automatically
+    async function pollLiveStateSilently() {
+      if (!appState.token || !appState.user) return;
+      if (document.querySelector('dialog[open]')) return;
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
+      try {
+        const data = await apiFetch('/api/state');
+        if (!data.user) return;
+        const prevSig = JSON.stringify({
+          f: (appState.feedPosts || []).map(p => p.id + ':' + p.likedByMe),
+          m: (appState.myPosts || []).map(p => p.id + ':' + p.ownerOnlyLikesCount),
+          s: (appState.stories || []).map(p => p.id),
+          c: (appState.connections || []).map(c => c.id + ':' + c.status),
+        });
+        const nextSig = JSON.stringify({
+          f: (data.feedPosts || []).map(p => p.id + ':' + p.likedByMe),
+          m: (data.myPosts || []).map(p => p.id + ':' + p.ownerOnlyLikesCount),
+          s: (data.stories || []).map(p => p.id),
+          c: (data.connections || []).map(c => c.id + ':' + c.status),
+        });
+        appState.user = data.user;
+        appState.connections = data.connections || [];
+        appState.seenPostIds = data.seenPostIds || [];
+        appState.feedPosts = data.feedPosts || [];
+        appState.myPosts = data.myPosts || [];
+        appState.myStories = data.myStories || [];
+        appState.stories = data.stories || [];
+        appState.allProfiles = data.allProfiles || [];
+        if (prevSig !== nextSig) {
+          render();
+        }
+      } catch (_e) {}
+    }
+
+    setInterval(pollLiveStateSilently, 5000);
+    window.addEventListener('focus', pollLiveStateSilently);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') pollLiveStateSilently();
+    });
 
     loadLiveData();
   </script>

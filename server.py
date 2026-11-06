@@ -642,21 +642,31 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     else:
                         if author_id == uid:
                             my_posts.append(p)
+                            feed_posts.append(p)
                         else:
                             feed_posts.append(p)
 
-                other_users = [
-                    dict(r)
-                    for r in conn.execute(
-                        """
-                        SELECT id, handle, display_name, bio, account_type, is_verified_institution
-                        FROM users
-                        WHERE id != ? AND email_confirmed = 1 AND account_type != 'moderator'
-                        ORDER BY created_at DESC
-                        """,
-                        (uid,),
-                    ).fetchall()
-                ]
+                other_users = []
+                for r in conn.execute(
+                    """
+                    SELECT id, handle, display_name, bio, account_type, is_verified_institution
+                    FROM users
+                    WHERE id != ? AND email_confirmed = 1 AND account_type != 'moderator'
+                    ORDER BY created_at DESC
+                    """,
+                    (uid,),
+                ).fetchall():
+                    u_dict = dict(r)
+                    u_id = u_dict["id"]
+                    u_dict["posts_count"] = conn.execute(
+                        "SELECT COUNT(*) AS c FROM posts WHERE author_id = ? AND media_kind = 'photo_post'",
+                        (u_id,),
+                    ).fetchone()["c"]
+                    u_dict["friends_count"] = conn.execute(
+                        "SELECT COUNT(*) AS c FROM connections WHERE status = 'accepted' AND (requester_id = ? OR addressee_id = ?)",
+                        (u_id, u_id),
+                    ).fetchone()["c"]
+                    other_users.append(u_dict)
 
                 return self.send_json(
                     {
