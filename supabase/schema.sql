@@ -14,7 +14,7 @@ create table if not exists public.profiles (
   bio text default '',
   avatar_url text,
   account_type text not null default 'personal'
-    check (account_type in ('personal', 'institution')),
+    check (account_type in ('personal', 'institution', 'moderator')),
   is_verified_institution boolean not null default false,
   institution_domain text,
   settings jsonb not null default '{}'::jsonb,
@@ -266,3 +266,26 @@ create policy "Authenticated users can upload media"
 create policy "Anyone can view media URLs"
   on storage.objects for select to authenticated
   using (bucket_id = 'media');
+
+-- 9. MODERATION REPORTS & IMMEDIATE NUDITY DELETION LOGS
+create table if not exists public.moderation_reports (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid not null references public.posts(id) on delete cascade,
+  reporter_id uuid references public.profiles(id) on delete set null,
+  reason text not null,
+  details text default '',
+  status text not null default 'open'
+    check (status in ('open', 'taken_down', 'dismissed')),
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.moderation_logs (
+  id uuid primary key default gen_random_uuid(),
+  moderator_id text not null,
+  action text not null,
+  target_id text not null,
+  author_handle text default '',
+  reason text not null,
+  created_at timestamptz not null default now()
+);
+

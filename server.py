@@ -2,9 +2,11 @@
 import base64
 import hashlib
 import http.server
+import io
 import json
 import os
 import random
+import re
 import secrets
 import sqlite3
 import time
@@ -12,12 +14,21 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
 UPLOADS_DIR = WEB_DIR / "uploads"
 DB_PATH = BASE_DIR / "ivris.db"
 
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+DEFAULT_MOD_EMAIL = os.environ.get("IVRIS_MOD_EMAIL", "moderator@ivris.app")
+DEFAULT_MOD_HANDLE = os.environ.get("IVRIS_MOD_HANDLE", "moderator")
+DEFAULT_MOD_PASSWORD = os.environ.get("IVRIS_MOD_PASSWORD", "IvrisMod2026!")
 
 DEFAULT_SETTINGS = {
     "read_receipts": True,
@@ -27,6 +38,15 @@ DEFAULT_SETTINGS = {
     "notify_requests": True,
     "notify_messages": True,
 }
+
+EXPLICIT_NUDITY_PATTERN = re.compile(
+    r"\b(nude|nudes|nudity|naked|nsfw|porn|porno|pornography|xxx|onlyfans|topless|uncensored|sextape|sex\s*tape|explicit\s*nude)\b",
+    re.IGNORECASE,
+)
+
+
+def hash_pw(password: str) -> str:
+    return hashlib.sha256(("ivris_salt_" + password).encode("utf-8")).hexdigest()
 
 
 def get_db():
@@ -115,6 +135,26 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'pending_review',
             created_at INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS moderation_reports (
+            id TEXT PRIMARY KEY,
+            post_id TEXT NOT NULL,
+            reporter_id TEXT,
+            reason TEXT NOT NULL,
+            details TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS moderation_logs (
+            id TEXT PRIMARY KEY,
+            moderator_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            author_handle TEXT DEFAULT '',
+            reason TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
         """
     )
     existing_user_cols = [
@@ -135,12 +175,226 @@ def init_db():
     if "music_json" not in existing_post_cols:
         cur.execute("ALTER TABLE posts ADD COLUMN music_json TEXT DEFAULT ''")
 
+    # Seed dedicated Moderation Account if not present
+    mod_row = cur.execute(
+        "SELECT * FROM users WHERE handle = ? OR email = ?",
+        (DEFAULT_MOD_HANDLE, DEFAULT_MOD_EMAIL),
+    ).fetchone()
+    if not mod_row:
+        cur.execute(
+            """
+            INSERT INTO users (id, email, password_hash, handle, display_name, bio, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'moderator', 0, 1, '', ?, ?)
+            """,
+            (
+                "usr_moderator",
+                DEFAULT_MOD_EMAIL,
+                hash_pw(DEFAULT_MOD_PASSWORD),
+                DEFAULT_MOD_HANDLE,
+                "Ivris Moderation",
+                "Official Ivris Trust & Safety Moderation Account",
+                json.dumps(DEFAULT_SETTINGS),
+                int(time.time()),
+            ),
+        )
+    else:
+        cur.execute(
+            "UPDATE users SET account_type = 'moderator', email_confirmed = 1 WHERE id = ?",
+            (mod_row["id"],),
+        )
+
     conn.commit()
     conn.close()
 
 
-def hash_pw(password: str) -> str:
-    return hashlib.sha256(("ivris_salt_" + password).encode("utf-8")).hexdigest()
+def inspect_image_bytes_for_nudity(raw_bytes: bytes) -> tuple[bool, str]:
+    """
+    Analyzes image bytes using YCbCr + RGB skin-exposure heuristics to detect
+    unclothed/nudity imagery so it can be immediately blocked and deleted.
+    """
+    if not raw_bytes or Image is None:
+        return False, ""
+    try:
+        with Image.open(io.BytesIO(raw_bytes)) as img:
+            rgb_img = img.convert("RGB").resize((96, 96))
+            ycbcr_img = rgb_img.convert("YCbCr")
+            rgb_pixels = list(rgb_img.getdata())
+            ycbcr_pixels = list(ycbcr_img.getdata())
+
+            total_pixels = len(rgb_pixels)
+            if total_pixels == 0:
+                return False, ""
+
+            skin_count = 0
+            center_skin_count = 0
+            center_total = 0
+
+            for idx, ((r, g, b), (y, cb, cr)) in enumerate(zip(rgb_pixels, ycbcr_pixels)):
+                row = idx // 96
+                col = idx % 96
+                in_center = 16 <= row <= 80 and 16 <= col <= 80
+                if in_center:
+                    center_total += 1
+
+                # Dual RGB + YCbCr skin-tone cluster rule
+                rgb_skin = (
+                    r > 95
+                    and g > 40
+                    and b > 20
+                    and (max(r, g, b) - min(r, g, b)) > 15
+                    and abs(r - g) > 15
+                    and r > g
+                    and r > b
+                )
+                ycbcr_skin = (80 <= cb <= 127) and (133 <= cr <= 173) and (y > 60)
+
+                if rgb_skin and ycbcr_skin:
+                    skin_count += 1
+                    if in_center:
+                        center_skin_count += 1
+
+            overall_ratio = skin_count / total_pixels
+            center_ratio = center_skin_count / max(center_total, 1)
+
+            # High central & overall skin exposure threshold indicative of nudity
+            if center_ratio >= 0.62 and overall_ratio >= 0.50:
+                return (
+                    True,
+                    f"Automated image nudity detector triggered (central exposure {int(center_ratio * 100)}%, overall {int(overall_ratio * 100)}%).",
+                )
+    except Exception:
+        return False, ""
+    return False, ""
+
+
+def detect_nudity_or_explicit(
+    caption: str, location: str, raw_media_list: list[bytes]
+) -> tuple[bool, str]:
+    """
+    Checks caption, location, and every uploaded media file for nudity or explicit content.
+    """
+    combined_text = f"{caption or ''} {location or ''}"
+    match = EXPLICIT_NUDITY_PATTERN.search(combined_text)
+    if match:
+        return (
+            True,
+            f"Explicit/nudity keyword detected ('{match.group(0)}').",
+        )
+
+    for idx, media_bytes in enumerate(raw_media_list):
+        flagged, reason = inspect_image_bytes_for_nudity(media_bytes)
+        if flagged:
+            return True, f"Media #{idx + 1}: {reason}"
+
+    return False, ""
+
+
+def unlink_post_files(post_row: dict):
+    """Immediately deletes all physical media files associated with a post from disk."""
+    urls = []
+    try:
+        urls = json.loads(post_row.get("media_urls_json") or "[]")
+    except Exception:
+        urls = []
+    if post_row.get("media_url") and post_row["media_url"] not in urls:
+        urls.append(post_row["media_url"])
+
+    for u in urls:
+        if isinstance(u, str) and u.startswith("/uploads/"):
+            fname = u.replace("/uploads/", "", 1)
+            fpath = (UPLOADS_DIR / fname).resolve()
+            if str(fpath).startswith(str(UPLOADS_DIR.resolve())) and fpath.exists():
+                try:
+                    fpath.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+
+def delete_post_immediately(
+    conn, post_id: str, moderator_id: str, action: str, reason: str
+) -> bool:
+    """
+    Immediately deletes a post from SQLite, removes its physical files from UPLOADS_DIR,
+    resolves any open reports on the post, and writes an audit record to moderation_logs.
+    """
+    row = conn.execute(
+        """
+        SELECT p.*, u.handle AS author_handle
+        FROM posts p
+        LEFT JOIN users u ON u.id = p.author_id
+        WHERE p.id = ?
+        """,
+        (post_id,),
+    ).fetchone()
+    if not row:
+        return False
+
+    post_dict = dict(row)
+    unlink_post_files(post_dict)
+
+    conn.execute("DELETE FROM post_likes WHERE post_id = ?", (post_id,))
+    conn.execute("DELETE FROM post_receipts WHERE post_id = ?", (post_id,))
+    conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+    conn.execute(
+        "UPDATE moderation_reports SET status = 'taken_down' WHERE post_id = ?",
+        (post_id,),
+    )
+    conn.execute(
+        """
+        INSERT INTO moderation_logs (id, moderator_id, action, target_id, author_handle, reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "log_" + secrets.token_hex(6),
+            moderator_id,
+            action,
+            post_id,
+            post_dict.get("author_handle") or "unknown",
+            reason,
+            int(time.time()),
+        ),
+    )
+    return True
+
+
+def sweep_and_delete_nudity(conn) -> int:
+    """
+    Scans all existing posts in the database and immediately deletes any post
+    whose caption or stored image files trigger nudity detection.
+    """
+    rows = conn.execute("SELECT * FROM posts").fetchall()
+    deleted_count = 0
+    for r in rows:
+        p = dict(r)
+        raw_files = []
+        try:
+            urls = json.loads(p.get("media_urls_json") or "[]")
+        except Exception:
+            urls = []
+        if not urls and p.get("media_url"):
+            urls = [p["media_url"]]
+
+        for u in urls:
+            if isinstance(u, str) and u.startswith("/uploads/"):
+                fpath = UPLOADS_DIR / u.replace("/uploads/", "", 1)
+                if fpath.exists():
+                    try:
+                        raw_files.append(fpath.read_bytes())
+                    except Exception:
+                        pass
+
+        flagged, reason = detect_nudity_or_explicit(
+            p.get("caption", ""), p.get("location_label", ""), raw_files
+        )
+        if flagged:
+            if delete_post_immediately(
+                conn, p["id"], "system_auto_nudity_filter", "auto_deleted_nudity", reason
+            ):
+                deleted_count += 1
+
+    if deleted_count > 0:
+        conn.commit()
+    return deleted_count
 
 
 def are_mutually_connected(conn, user_a: str, user_b: str) -> bool:
@@ -195,6 +449,104 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+
+        if parsed.path in ("/moderation", "/moderation/"):
+            mod_file = WEB_DIR / "moderation.html"
+            if mod_file.exists():
+                content = mod_file.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
+        if parsed.path == "/api/moderation/dashboard":
+            conn = get_db()
+            try:
+                user = self.get_current_user(conn)
+                if not user or user.get("account_type") != "moderator":
+                    return self.send_json(
+                        {"error": "Moderator account authorization required."}, 403
+                    )
+
+                auto_deleted_now = sweep_and_delete_nudity(conn)
+
+                reports = [
+                    dict(r)
+                    for r in conn.execute(
+                        """
+                        SELECT r.*,
+                               p.media_url, p.media_urls_json, p.media_kind, p.caption, p.created_at AS post_created_at,
+                               u.handle AS author_handle, u.display_name AS author_name, u.id AS author_id,
+                               rep.handle AS reporter_handle
+                        FROM moderation_reports r
+                        LEFT JOIN posts p ON p.id = r.post_id
+                        LEFT JOIN users u ON u.id = p.author_id
+                        LEFT JOIN users rep ON rep.id = r.reporter_id
+                        ORDER BY
+                          CASE WHEN r.status = 'open' THEN 0 ELSE 1 END ASC,
+                          r.created_at DESC
+                        """
+                    ).fetchall()
+                ]
+
+                active_posts = []
+                for r in conn.execute(
+                    """
+                    SELECT p.*, u.handle AS author_handle, u.display_name AS author_name, u.account_type
+                    FROM posts p
+                    JOIN users u ON u.id = p.author_id
+                    ORDER BY p.created_at DESC
+                    """
+                ).fetchall():
+                    item = dict(r)
+                    try:
+                        item["media_urls"] = json.loads(item.get("media_urls_json") or "[]")
+                    except Exception:
+                        item["media_urls"] = [item["media_url"]]
+                    active_posts.append(item)
+
+                logs = [
+                    dict(r)
+                    for r in conn.execute(
+                        """
+                        SELECT * FROM moderation_logs
+                        ORDER BY created_at DESC
+                        LIMIT 100
+                        """
+                    ).fetchall()
+                ]
+
+                users_list = [
+                    dict(r)
+                    for r in conn.execute(
+                        """
+                        SELECT id, email, handle, display_name, account_type, is_verified_institution, created_at
+                        FROM users
+                        WHERE account_type != 'moderator'
+                        ORDER BY created_at DESC
+                        """
+                    ).fetchall()
+                ]
+
+                return self.send_json(
+                    {
+                        "moderator": {
+                            "id": user["id"],
+                            "handle": user["handle"],
+                            "email": user["email"],
+                        },
+                        "auto_deleted_in_sweep": auto_deleted_now,
+                        "reports": reports,
+                        "active_posts": active_posts,
+                        "logs": logs,
+                        "users": users_list,
+                    }
+                )
+            finally:
+                conn.close()
+
         if parsed.path == "/api/state":
             conn = get_db()
             try:
@@ -299,7 +651,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         """
                         SELECT id, handle, display_name, bio, account_type, is_verified_institution
                         FROM users
-                        WHERE id != ? AND email_confirmed = 1
+                        WHERE id != ? AND email_confirmed = 1 AND account_type != 'moderator'
                         ORDER BY created_at DESC
                         """,
                         (uid,),
@@ -548,7 +900,13 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     (token, user["id"], int(time.time())),
                 )
                 conn.commit()
-                return self.send_json({"token": token})
+                return self.send_json(
+                    {
+                        "token": token,
+                        "account_type": user["account_type"],
+                        "handle": user["handle"],
+                    }
+                )
 
             if parsed.path == "/api/institution-apply":
                 inst_name = (body.get("institution_name") or "").strip()
@@ -575,11 +933,141 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 conn.commit()
                 return self.send_json({"ok": True})
 
+            # Public or authenticated content report endpoint
+            if parsed.path == "/api/report":
+                user = self.get_current_user(conn)
+                post_id = (body.get("post_id") or "").strip()
+                reason = (body.get("reason") or "reported_content").strip()
+                details = (body.get("details") or "").strip()
+                if not post_id:
+                    return self.send_json({"error": "post_id is required."}, 400)
+
+                post_row = conn.execute(
+                    "SELECT * FROM posts WHERE id = ?", (post_id,)
+                ).fetchone()
+                if not post_row:
+                    return self.send_json({"error": "Post not found or already deleted."}, 404)
+
+                # If reported for nudity, immediately delete the post and its files
+                if "nudi" in reason.lower() or "explicit" in reason.lower():
+                    delete_post_immediately(
+                        conn,
+                        post_id,
+                        user["id"] if user else "system_auto_nudity_filter",
+                        "auto_deleted_nudity",
+                        f"Immediate deletion triggered by nudity report: {reason}",
+                    )
+                    conn.commit()
+                    return self.send_json(
+                        {
+                            "ok": True,
+                            "immediately_deleted": True,
+                            "message": "Nudity report verified: Post and media files were immediately deleted.",
+                        }
+                    )
+
+                report_id = "rep_" + secrets.token_hex(6)
+                conn.execute(
+                    """
+                    INSERT INTO moderation_reports (id, post_id, reporter_id, reason, details, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'open', ?)
+                    """,
+                    (
+                        report_id,
+                        post_id,
+                        user["id"] if user else None,
+                        reason,
+                        details,
+                        int(time.time()),
+                    ),
+                )
+                conn.commit()
+                return self.send_json({"ok": True, "report_id": report_id})
+
             # Authenticated endpoints below
             user = self.get_current_user(conn)
             if not user:
                 return self.send_json({"error": "Unauthorized"}, 401)
             uid = user["id"]
+
+            # Moderator-only endpoints
+            if parsed.path.startswith("/api/moderation/"):
+                if user.get("account_type") != "moderator":
+                    return self.send_json(
+                        {"error": "Moderator account authorization required."}, 403
+                    )
+
+                if parsed.path == "/api/moderation/takedown":
+                    post_id = (body.get("post_id") or "").strip()
+                    reason = (body.get("reason") or "Moderator takedown of reported/violating post").strip()
+                    if not post_id:
+                        return self.send_json({"error": "post_id is required."}, 400)
+                    deleted = delete_post_immediately(
+                        conn, post_id, uid, "takedown_post", reason
+                    )
+                    conn.commit()
+                    if not deleted:
+                        return self.send_json({"error": "Post already removed."}, 404)
+                    return self.send_json({"ok": True, "deleted_post_id": post_id})
+
+                if parsed.path == "/api/moderation/dismiss-report":
+                    report_id = (body.get("report_id") or "").strip()
+                    conn.execute(
+                        "UPDATE moderation_reports SET status = 'dismissed' WHERE id = ?",
+                        (report_id,),
+                    )
+                    conn.commit()
+                    return self.send_json({"ok": True})
+
+                if parsed.path == "/api/moderation/sweep-nudity":
+                    removed = sweep_and_delete_nudity(conn)
+                    return self.send_json({"ok": True, "deleted_count": removed})
+
+                if parsed.path == "/api/moderation/delete-user":
+                    target_uid = (body.get("user_id") or "").strip()
+                    reason = (body.get("reason") or "Account removed by moderator").strip()
+                    target_user = conn.execute(
+                        "SELECT * FROM users WHERE id = ? AND account_type != 'moderator'",
+                        (target_uid,),
+                    ).fetchone()
+                    if not target_user:
+                        return self.send_json({"error": "User not found."}, 404)
+
+                    user_posts = conn.execute(
+                        "SELECT * FROM posts WHERE author_id = ?", (target_uid,)
+                    ).fetchall()
+                    for up in user_posts:
+                        unlink_post_files(dict(up))
+
+                    conn.execute("DELETE FROM post_likes WHERE user_id = ?", (target_uid,))
+                    conn.execute("DELETE FROM post_receipts WHERE user_id = ?", (target_uid,))
+                    conn.execute(
+                        "DELETE FROM direct_messages WHERE sender_id = ? OR recipient_id = ?",
+                        (target_uid, target_uid),
+                    )
+                    conn.execute(
+                        "DELETE FROM connections WHERE requester_id = ? OR addressee_id = ?",
+                        (target_uid, target_uid),
+                    )
+                    conn.execute("DELETE FROM posts WHERE author_id = ?", (target_uid,))
+                    conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_uid,))
+                    conn.execute("DELETE FROM users WHERE id = ?", (target_uid,))
+                    conn.execute(
+                        """
+                        INSERT INTO moderation_logs (id, moderator_id, action, target_id, author_handle, reason, created_at)
+                        VALUES (?, ?, 'remove_account', ?, ?, ?, ?)
+                        """,
+                        (
+                            "log_" + secrets.token_hex(6),
+                            uid,
+                            target_uid,
+                            target_user["handle"],
+                            reason,
+                            int(time.time()),
+                        ),
+                    )
+                    conn.commit()
+                    return self.send_json({"ok": True})
 
             if parsed.path == "/api/update-profile":
                 display_name = (body.get("display_name") or "").strip()
@@ -642,6 +1130,11 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({"ok": True, "settings": updated})
 
             if parsed.path == "/api/delete-account":
+                user_posts = conn.execute(
+                    "SELECT * FROM posts WHERE author_id = ?", (uid,)
+                ).fetchall()
+                for up in user_posts:
+                    unlink_post_files(dict(up))
                 conn.execute("DELETE FROM post_likes WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM post_receipts WHERE user_id = ?", (uid,))
                 conn.execute(
@@ -680,19 +1173,54 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         {"error": "You can upload a maximum of 15 photos per post."}, 400
                     )
 
-                saved_urls = []
+                decoded_items = []
+                raw_bytes_list = []
                 for idx, data_url in enumerate(data_urls):
                     if "," not in data_url:
                         continue
                     header, b64_data = data_url.split(",", 1)
                     ext = "mp4" if "video" in header else "jpg"
+                    raw_media = base64.b64decode(b64_data)
+                    decoded_items.append((idx, ext, raw_media))
+                    if ext != "mp4":
+                        raw_bytes_list.append(raw_media)
+
+                if not decoded_items:
+                    return self.send_json({"error": "Invalid media files."}, 400)
+
+                # Immediate Nudity Detection & Deletion before saving to disk or database
+                is_nudity, nudity_reason = detect_nudity_or_explicit(
+                    caption, location, raw_bytes_list
+                )
+                if is_nudity:
+                    conn.execute(
+                        """
+                        INSERT INTO moderation_logs (id, moderator_id, action, target_id, author_handle, reason, created_at)
+                        VALUES (?, 'system_auto_nudity_filter', 'auto_deleted_nudity', ?, ?, ?, ?)
+                        """,
+                        (
+                            "log_" + secrets.token_hex(6),
+                            "blocked_upload_" + secrets.token_hex(4),
+                            user["handle"],
+                            nudity_reason,
+                            int(time.time()),
+                        ),
+                    )
+                    conn.commit()
+                    return self.send_json(
+                        {
+                            "error": "Upload immediately deleted: Nudity and explicit content are strictly prohibited on Ivris.",
+                            "auto_deleted_nudity": True,
+                        },
+                        400,
+                    )
+
+                saved_urls = []
+                for idx, ext, raw_media in decoded_items:
                     filename = f"{uid}_{int(time.time() * 1000)}_{idx}.{ext}"
                     filepath = UPLOADS_DIR / filename
-                    filepath.write_bytes(base64.b64decode(b64_data))
+                    filepath.write_bytes(raw_media)
                     saved_urls.append(f"/uploads/{filename}")
-
-                if not saved_urls:
-                    return self.send_json({"error": "Invalid media files."}, 400)
 
                 now_ts = int(time.time())
                 expires_at = now_ts + 86400 if media_kind == "video_story" else None
