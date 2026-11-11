@@ -210,3 +210,47 @@ export async function applyForInstitution(params: {
     }),
   });
 }
+
+export async function updateUserProfile(params: {
+  display_name: string;
+  handle: string;
+  bio: string;
+  avatar_data_url?: string;
+  remove_avatar?: boolean;
+}) {
+  const data = await apiFetch('/api/update-profile', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+  if (data?.token) {
+    await setStoredToken(data.token);
+  }
+  return data;
+}
+
+export async function reportPostOnServer(postId: string, reason: string) {
+  return await apiFetch('/api/report', {
+    method: 'POST',
+    body: JSON.stringify({
+      report_type: 'post',
+      post_id: postId,
+      reason,
+    }),
+  });
+}
+
+export async function reportAccountOnServer(params: {
+  target_user_id: string;
+  reason: string;
+  block_user?: boolean;
+}) {
+  return await apiFetch('/api/report', {
+    method: 'POST',
+    body: JSON.stringify({
+      report_type: 'account',
+      target_user_id: params.target_user_id,
+      reason: params.reason,
+      block_user: Boolean(params.block_user),
+    }),
+  });
+}

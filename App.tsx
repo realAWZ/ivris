@@ -15,6 +15,7 @@ import {
   Switch,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   API_BASE_URL,
   getStoredToken,
@@ -27,6 +28,9 @@ import {
   deletePost,
   deleteUserAccount,
   updateUserSettings,
+  updateUserProfile,
+  reportPostOnServer,
+  reportAccountOnServer,
   toggleConnection,
   fetchChatMessages,
   sendChatMessage,
@@ -153,7 +157,16 @@ export default function App() {
   const [musicResults, setMusicResults] = useState<MusicTrack[]>([]);
   const [uploading, setUploading] = useState(false);
 
-  // Settings State
+  // Settings & Appearance State
+  const [themeMode, setThemeMode] = useState<'dark' | 'light'>('dark');
+  const [editProfileModalOpen, setEditProfileModalOpen] = useState(false);
+  const [editNameDraft, setEditNameDraft] = useState('');
+  const [editHandleDraft, setEditHandleDraft] = useState('');
+  const [editBioDraft, setEditBioDraft] = useState('');
+  const [editAvatarDataUrl, setEditAvatarDataUrl] = useState('');
+  const [reportAccountTarget, setReportAccountTarget] = useState<DbProfile | null>(null);
+  const [reportBlockToggle, setReportBlockToggle] = useState(false);
+
   const [settings, setSettings] = useState<UserSettings>({
     read_receipts: true,
     story_replies: true,
@@ -163,13 +176,101 @@ export default function App() {
     notify_messages: true,
   });
 
-  // 1. Restore persistent auth session
+  // 1. Restore persistent auth session & theme preference
   useEffect(() => {
+    AsyncStorage.getItem('ivris_color_scheme')
+      .then((savedTheme) => {
+        if (savedTheme === 'light' || savedTheme === 'dark') {
+          setThemeMode(savedTheme);
+        }
+      })
+      .catch(() => {});
     getStoredToken().then((token) => {
       setAuthToken(token);
       setLoading(false);
     });
   }, []);
+
+  const handleSetThemeMode = async (nextMode: 'dark' | 'light') => {
+    setThemeMode(nextMode);
+    try {
+      await AsyncStorage.setItem('ivris_color_scheme', nextMode);
+    } catch (_e) {}
+  };
+
+  const openEditProfileModal = () => {
+    if (!myProfile) return;
+    setEditNameDraft(myProfile.display_name || '');
+    setEditHandleDraft(myProfile.handle || '');
+    setEditBioDraft(myProfile.bio || '');
+    setEditAvatarDataUrl('');
+    setEditProfileModalOpen(true);
+  };
+
+  const handlePickProfileAvatar = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission needed', 'Allow photo library access to set a profile picture.');
+      return;
+    }
+    const pickerResult = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.85,
+      base64: true,
+    });
+    if (pickerResult.canceled || !pickerResult.assets?.length) return;
+    const asset = pickerResult.assets[0];
+    if (asset.base64) {
+      setEditAvatarDataUrl(`data:image/jpeg;base64,${asset.base64}`);
+    }
+  };
+
+  const handleSaveProfileChanges = async () => {
+    if (!myProfile) return;
+    try {
+      setUploading(true);
+      const res = await updateUserProfile({
+        display_name: editNameDraft.trim() || myProfile.display_name,
+        handle: editHandleDraft.trim().toLowerCase() || myProfile.handle,
+        bio: editBioDraft.trim(),
+        avatar_data_url: editAvatarDataUrl || undefined,
+      });
+      if (res?.user) {
+        setMyProfile(res.user);
+      }
+      setEditProfileModalOpen(false);
+      await refreshAllData();
+      Alert.alert('Saved', 'Your profile has been updated.');
+    } catch (err: any) {
+      Alert.alert('Update Error', err.message || 'Could not update profile');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleSubmitAccountReport = async (reason: string) => {
+    if (!reportAccountTarget) return;
+    try {
+      const res = await reportAccountOnServer({
+        target_user_id: reportAccountTarget.id,
+        reason,
+        block_user: reportBlockToggle,
+      });
+      setReportAccountTarget(null);
+      setReportBlockToggle(false);
+      await refreshAllData();
+      Alert.alert(
+        'Report Submitted',
+        res?.auto_cleared_avatar
+          ? 'This account’s profile photo was immediately removed and logged for moderation.'
+          : 'Thank you for keeping Ivris safe. Our moderation team has received your report.'
+      );
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not submit report');
+    }
+  };
 
   // 2. Load Current User Profile & Real Data from Server
   const refreshAllData = useCallback(async () => {
@@ -686,14 +787,55 @@ export default function App() {
       : feedPosts;
   const myId = myProfile.id;
   const myInitials = (myProfile?.handle || 'U').slice(0, 2).toUpperCase();
+  const isLight = themeMode === 'light';
+  const bgStyle = { backgroundColor: isLight ? '#ffffff' : '#000000' };
+  const textStyle = { color: isLight ? '#0f172a' : '#ffffff' };
+  const cardStyle = {
+    backgroundColor: isLight ? '#f1f5f9' : '#121212',
+    borderColor: isLight ? '#e2e8f0' : '#27272a',
+  };
+
+  const renderAvatarCircle = (
+    avatarUrl: string | null | undefined,
+    handleStr: string | undefined,
+    size: number = 36
+  ) => {
+    const resolved = resolveMediaUrl(avatarUrl);
+    const initials = (handleStr || 'U').slice(0, 2).toUpperCase();
+    return (
+      <View
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: isLight ? '#e2e8f0' : '#18181b',
+          overflow: 'hidden',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {resolved ? (
+          <Image
+            source={{ uri: resolved }}
+            style={{ width: size, height: size, borderRadius: size / 2 }}
+            resizeMode="cover"
+          />
+        ) : (
+          <Text style={[styles.storyInitials, textStyle, { fontSize: Math.max(11, Math.floor(size * 0.34)) }]}>
+            {initials}
+          </Text>
+        )}
+      </View>
+    );
+  };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, bgStyle]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, isLight && { borderBottomColor: '#e2e8f0' }]}>
         {activeScreen === 'settings' ? (
           <TouchableOpacity onPress={() => setActiveScreen('profile')}>
-            <Text style={styles.headerActionText}>‹ Profile</Text>
+            <Text style={[styles.headerActionText, textStyle]}>‹ Profile</Text>
           </TouchableOpacity>
         ) : activeScreen === 'messages' || activeScreen === 'chat' || activeScreen === 'myPost' ? (
           <TouchableOpacity
@@ -707,22 +849,28 @@ export default function App() {
               )
             }
           >
-            <Text style={styles.headerActionText}>‹ Back</Text>
+            <Text style={[styles.headerActionText, textStyle]}>‹ Back</Text>
           </TouchableOpacity>
         ) : (
-          <Text style={styles.brandWordmark}>
+          <Text style={[styles.brandWordmark, textStyle]}>
             {activeScreen === 'profile' ? myProfile?.handle || 'Ivris' : 'Ivris'}
           </Text>
         )}
 
         {activeScreen === 'settings' ? (
-          <Text style={styles.postUsername}>Settings and activity</Text>
+          <Text style={[styles.postUsername, textStyle]}>Settings and activity</Text>
+        ) : activeScreen === 'chat' && activeChatPartner ? (
+          <Text style={[styles.postUsername, textStyle]}>@{activeChatPartner.handle}</Text>
         ) : null}
 
         <View style={styles.headerRight}>
-          {activeScreen === 'profile' ? (
+          {activeScreen === 'chat' && activeChatPartner ? (
+            <TouchableOpacity onPress={() => setReportAccountTarget(activeChatPartner)}>
+              <Text style={[styles.headerActionText, { color: '#f43f5e' }]}>Report</Text>
+            </TouchableOpacity>
+          ) : activeScreen === 'profile' ? (
             <TouchableOpacity onPress={() => setActiveScreen('settings')}>
-              <Text style={styles.headerActionText}>☰</Text>
+              <Text style={[styles.headerActionText, textStyle]}>☰</Text>
             </TouchableOpacity>
           ) : activeScreen !== 'settings' ? (
             <>
@@ -732,10 +880,10 @@ export default function App() {
                   setComposeModalOpen(true);
                 }}
               >
-                <Text style={styles.headerActionText}>+ Post</Text>
+                <Text style={[styles.headerActionText, textStyle]}>+ Post</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={() => setActiveScreen('messages')}>
-                <Text style={styles.headerActionText}>Messages</Text>
+                <Text style={[styles.headerActionText, textStyle]}>Messages</Text>
               </TouchableOpacity>
             </>
           ) : (
@@ -751,7 +899,7 @@ export default function App() {
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              style={styles.storyTray}
+              style={[styles.storyTray, isLight && { borderBottomColor: '#e2e8f0' }]}
               contentContainerStyle={styles.storyTrayContent}
             >
               <TouchableOpacity
@@ -771,11 +919,9 @@ export default function App() {
                     myStories.length > 0 ? styles.friendRing : styles.inactiveRing,
                   ]}
                 >
-                  <View style={styles.storyAvatarInner}>
-                    <Text style={styles.storyInitials}>{myInitials}</Text>
-                  </View>
+                  {renderAvatarCircle(myProfile?.avatar_url, myProfile?.handle, 58)}
                 </View>
-                <Text style={styles.storyUsername} numberOfLines={1}>
+                <Text style={[styles.storyUsername, textStyle]} numberOfLines={1}>
                   Your story
                 </Text>
               </TouchableOpacity>
@@ -787,14 +933,14 @@ export default function App() {
                   onPress={() => setActiveStory(story)}
                 >
                   <View style={[styles.storyRing, styles.friendRing]}>
-                    <View style={styles.storyAvatarInner}>
-                      <Text style={styles.storyInitials}>
-                        {(story.profiles?.handle || 'U').slice(0, 2).toUpperCase()}
-                      </Text>
-                    </View>
+                    {renderAvatarCircle(
+                      (story as any).avatar_url || story.profiles?.avatar_url,
+                      (story as any).handle || story.profiles?.handle,
+                      58
+                    )}
                   </View>
-                  <Text style={styles.storyUsername} numberOfLines={1}>
-                    {story.profiles?.handle}
+                  <Text style={[styles.storyUsername, textStyle]} numberOfLines={1}>
+                    {(story as any).handle || story.profiles?.handle}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -803,7 +949,7 @@ export default function App() {
             {/* Empty / Caught-up State */}
             {unseenFeed.length === 0 ? (
               <View style={styles.emptyStateBox}>
-                <Text style={styles.postUsername}>You’re all caught up</Text>
+                <Text style={[styles.postUsername, textStyle]}>You’re all caught up</Text>
                 <Text style={styles.postLocation}>
                   Connect with friends or follow institutions in Search to see new posts.
                 </Text>
@@ -815,55 +961,63 @@ export default function App() {
                 </TouchableOpacity>
               </View>
             ) : (
-              unseenFeed.map((post) => (
-                <View key={post.id} style={styles.postContainer}>
-                  <View style={styles.postHeaderRow}>
-                    <View>
-                      <Text style={styles.postUsername}>{post.profiles?.handle}</Text>
-                      {post.music?.title ? (
-                        <Text style={styles.musicSubtitle}>
-                          ♪ {post.music.artist} · {post.music.title}
-                        </Text>
-                      ) : Boolean(post.location_label) ? (
-                        <Text style={styles.postLocation}>{post.location_label}</Text>
-                      ) : null}
-                    </View>
-                    <TouchableOpacity onPress={() => handleMarkSeen(post.id)}>
-                      <Text style={styles.doneText}>Done</Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  {renderPostCarousel(post)}
-
-                  {/* Action Row: No public like count shown on other people's posts */}
-                  <View style={styles.actionRow}>
-                    <View style={styles.actionLeft}>
-                      <TouchableOpacity onPress={() => handleToggleLike(post)}>
-                        <Text
-                          style={[
-                            styles.actionBtnText,
-                            post.likedByMe && styles.likedText,
-                          ]}
-                        >
-                          {post.likedByMe ? 'Liked' : 'Like'}
-                        </Text>
+              unseenFeed.map((post) => {
+                const postHandle = (post as any).handle || post.profiles?.handle || 'user';
+                const postAvatar = (post as any).avatar_url || post.profiles?.avatar_url;
+                return (
+                  <View key={post.id} style={[styles.postContainer, isLight && { borderBottomColor: '#e2e8f0' }]}>
+                    <View style={styles.postHeaderRow}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        {renderAvatarCircle(postAvatar, postHandle, 32)}
+                        <View>
+                          <Text style={[styles.postUsername, textStyle]}>{postHandle}</Text>
+                          {post.music?.title ? (
+                            <Text style={styles.musicSubtitle}>
+                              ♪ {post.music.artist} · {post.music.title}
+                            </Text>
+                          ) : Boolean(post.location_label) ? (
+                            <Text style={styles.postLocation}>{post.location_label}</Text>
+                          ) : null}
+                        </View>
+                      </View>
+                      <TouchableOpacity onPress={() => handleMarkSeen(post.id)}>
+                        <Text style={styles.doneText}>Done</Text>
                       </TouchableOpacity>
-                      {post.profiles && (
-                        <TouchableOpacity onPress={() => openChatWithUser(post.profiles!)}>
-                          <Text style={styles.actionBtnText}>Message</Text>
+                    </View>
+
+                    {renderPostCarousel(post)}
+
+                    {/* Action Row: No public like count shown on other people's posts */}
+                    <View style={styles.actionRow}>
+                      <View style={styles.actionLeft}>
+                        <TouchableOpacity onPress={() => handleToggleLike(post)}>
+                          <Text
+                            style={[
+                              styles.actionBtnText,
+                              textStyle,
+                              post.likedByMe && styles.likedText,
+                            ]}
+                          >
+                            {post.likedByMe ? 'Liked' : 'Like'}
+                          </Text>
                         </TouchableOpacity>
-                      )}
+                        {post.profiles && (
+                          <TouchableOpacity onPress={() => openChatWithUser(post.profiles!)}>
+                            <Text style={[styles.actionBtnText, textStyle]}>Message</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </View>
+
+                    <View style={styles.captionArea}>
+                      <Text style={[styles.captionText, textStyle]}>
+                        <Text style={[styles.postUsername, textStyle]}>{postHandle} </Text>
+                        {post.caption}
+                      </Text>
                     </View>
                   </View>
-
-                  <View style={styles.captionArea}>
-                    <Text style={styles.captionText}>
-                      <Text style={styles.postUsername}>{post.profiles?.handle} </Text>
-                      {post.caption}
-                    </Text>
-                  </View>
-                </View>
-              ))
+                );
+              })
             )}
           </View>
         )}
@@ -876,24 +1030,24 @@ export default function App() {
                 onChangeText={setSearchQuery}
                 placeholder="Search"
                 placeholderTextColor="#71717a"
-                style={styles.igSearchBar}
+                style={[styles.igSearchBar, isLight && { backgroundColor: '#f1f5f9', color: '#0f172a' }]}
               />
             </View>
 
-            <View style={styles.underlineTabRow}>
+            <View style={[styles.underlineTabRow, isLight && { borderBottomColor: '#e2e8f0' }]}>
               {(['accounts', 'institutions', 'requests'] as SearchTabKey[]).map((tab) => (
                 <TouchableOpacity
                   key={tab}
                   style={[
                     styles.underlineTab,
-                    searchTab === tab && styles.underlineTabActive,
+                    searchTab === tab && [styles.underlineTabActive, isLight && { borderBottomColor: '#0f172a' }],
                   ]}
                   onPress={() => setSearchTab(tab)}
                 >
                   <Text
                     style={[
                       styles.underlineTabText,
-                      searchTab === tab && styles.underlineTabTextActive,
+                      searchTab === tab && [styles.underlineTabTextActive, textStyle],
                     ]}
                   >
                     {tab === 'institutions'
@@ -941,17 +1095,28 @@ export default function App() {
                   : 'Requested';
 
                 return (
-                  <View key={item.id} style={styles.userRow}>
-                    <View style={styles.userRowInfo}>
-                      <Text style={styles.postUsername}>{item.handle}</Text>
-                      <Text style={styles.postLocation}>{item.display_name}</Text>
+                  <View key={item.id} style={[styles.userRow, isLight && { borderBottomColor: '#e2e8f0' }]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                      {renderAvatarCircle(item.avatar_url, item.handle, 40)}
+                      <View style={styles.userRowInfo}>
+                        <Text style={[styles.postUsername, textStyle]}>{item.handle}</Text>
+                        <Text style={styles.postLocation}>{item.display_name}</Text>
+                      </View>
                     </View>
-                    <TouchableOpacity
-                      style={styles.igFollowBtn}
-                      onPress={() => handleConnectionAction(item)}
-                    >
-                      <Text style={styles.igFollowBtnText}>{btnLabel}</Text>
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <TouchableOpacity
+                        style={styles.igFollowBtn}
+                        onPress={() => handleConnectionAction(item)}
+                      >
+                        <Text style={styles.igFollowBtnText}>{btnLabel}</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => setReportAccountTarget(item)}
+                        style={{ paddingHorizontal: 8, paddingVertical: 6 }}
+                      >
+                        <Text style={{ color: '#f43f5e', fontSize: 12, fontWeight: '600' }}>Report</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 );
               })}
@@ -972,12 +1137,15 @@ export default function App() {
               .map((friend) => (
                 <TouchableOpacity
                   key={friend.id}
-                  style={styles.userRow}
+                  style={[styles.userRow, isLight && { borderBottomColor: '#e2e8f0' }]}
                   onPress={() => openChatWithUser(friend)}
                 >
-                  <View style={styles.userRowInfo}>
-                    <Text style={styles.postUsername}>{friend.display_name}</Text>
-                    <Text style={styles.postLocation}>@{friend.handle}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                    {renderAvatarCircle(friend.avatar_url, friend.handle, 40)}
+                    <View style={styles.userRowInfo}>
+                      <Text style={[styles.postUsername, textStyle]}>{friend.display_name}</Text>
+                      <Text style={styles.postLocation}>@{friend.handle}</Text>
+                    </View>
                   </View>
                   <Text style={styles.sendText}>Message</Text>
                 </TouchableOpacity>
@@ -1004,7 +1172,7 @@ export default function App() {
                 onChangeText={setChatDraft}
                 placeholder="Message..."
                 placeholderTextColor="#71717a"
-                style={styles.chatInput}
+                style={[styles.chatInput, isLight && { backgroundColor: '#f1f5f9', color: '#0f172a' }]}
               />
               <TouchableOpacity onPress={handleSendDirectMessage}>
                 <Text style={styles.sendText}>Send</Text>
@@ -1016,18 +1184,16 @@ export default function App() {
         {activeScreen === 'profile' && (
           <View>
             <View style={styles.profileTop}>
-              <View style={[styles.profileAvatarRing, styles.friendRing]}>
-                <View style={styles.profileAvatarInner}>
-                  <Text style={styles.profileAvatarText}>{myInitials}</Text>
-                </View>
-              </View>
+              <TouchableOpacity onPress={openEditProfileModal} style={[styles.profileAvatarRing, styles.friendRing]}>
+                {renderAvatarCircle(myProfile?.avatar_url, myProfile?.handle, 72)}
+              </TouchableOpacity>
               <View style={styles.profileStatsRow}>
                 <View style={styles.statCol}>
-                  <Text style={styles.statValue}>{myPosts.length}</Text>
+                  <Text style={[styles.statValue, textStyle]}>{myPosts.length}</Text>
                   <Text style={styles.statLabel}>posts</Text>
                 </View>
                 <View style={styles.statCol}>
-                  <Text style={styles.statValue}>
+                  <Text style={[styles.statValue, textStyle]}>
                     {connections.filter((c) => c.status === 'accepted').length}
                   </Text>
                   <Text style={styles.statLabel}>friends</Text>
@@ -1036,16 +1202,22 @@ export default function App() {
             </View>
 
             <View style={styles.profileBioSection}>
-              <Text style={styles.postUsername}>{myProfile?.display_name}</Text>
+              <Text style={[styles.postUsername, textStyle]}>{myProfile?.display_name}</Text>
               {Boolean(myProfile?.bio) && (
                 <Text style={styles.postLocation}>{myProfile?.bio}</Text>
               )}
               <View style={styles.profileBtnRow}>
                 <TouchableOpacity
-                  style={styles.profileSecondaryBtn}
+                  style={[styles.profileSecondaryBtn, isLight && { backgroundColor: '#f1f5f9' }]}
+                  onPress={openEditProfileModal}
+                >
+                  <Text style={[styles.postUsername, textStyle]}>Edit profile</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.profileSecondaryBtn, isLight && { backgroundColor: '#f1f5f9' }]}
                   onPress={() => setActiveScreen('settings')}
                 >
-                  <Text style={styles.postUsername}>Settings</Text>
+                  <Text style={[styles.postUsername, textStyle]}>Settings</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1063,11 +1235,43 @@ export default function App() {
         {/* Redesigned iOS Settings and Activity Menu */}
         {activeScreen === 'settings' && (
           <View style={styles.settingsContainer}>
+            <Text style={styles.settingsSectionHeader}>Appearance</Text>
+            <View style={[styles.settingsCard, cardStyle, { flexDirection: 'row', padding: 6, gap: 6 }]}>
+              <TouchableOpacity
+                onPress={() => handleSetThemeMode('light')}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: 10,
+                  alignItems: 'center',
+                  backgroundColor: themeMode === 'light' ? '#0ea5e9' : 'transparent',
+                }}
+              >
+                <Text style={{ color: themeMode === 'light' ? '#ffffff' : '#71717a', fontSize: 12, fontWeight: '600' }}>
+                  ☀️ Light Mode
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => handleSetThemeMode('dark')}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: 10,
+                  alignItems: 'center',
+                  backgroundColor: themeMode === 'dark' ? '#0ea5e9' : 'transparent',
+                }}
+              >
+                <Text style={{ color: themeMode === 'dark' ? '#ffffff' : '#71717a', fontSize: 12, fontWeight: '600' }}>
+                  🌙 Dark Mode
+                </Text>
+              </TouchableOpacity>
+            </View>
+
             <Text style={styles.settingsSectionHeader}>Privacy & feed</Text>
-            <View style={styles.settingsCard}>
+            <View style={[styles.settingsCard, cardStyle]}>
               <View style={styles.settingsRow}>
                 <View style={styles.settingsRowText}>
-                  <Text style={styles.postUsername}>Read receipts</Text>
+                  <Text style={[styles.postUsername, textStyle]}>Read receipts</Text>
                   <Text style={styles.postLocation}>
                     Show friends when you’ve seen their messages
                   </Text>
@@ -1080,7 +1284,7 @@ export default function App() {
               </View>
               <View style={styles.settingsRow}>
                 <View style={styles.settingsRowText}>
-                  <Text style={styles.postUsername}>Story replies</Text>
+                  <Text style={[styles.postUsername, textStyle]}>Story replies</Text>
                   <Text style={styles.postLocation}>
                     Allow mutual friends to reply to your stories
                   </Text>
@@ -1093,7 +1297,7 @@ export default function App() {
               </View>
               <View style={styles.settingsRow}>
                 <View style={styles.settingsRowText}>
-                  <Text style={styles.postUsername}>Hide seen posts</Text>
+                  <Text style={[styles.postUsername, textStyle]}>Hide seen posts</Text>
                   <Text style={styles.postLocation}>
                     Remove posts from Home once marked Done
                   </Text>
@@ -1107,10 +1311,10 @@ export default function App() {
             </View>
 
             <Text style={styles.settingsSectionHeader}>Notifications</Text>
-            <View style={styles.settingsCard}>
+            <View style={[styles.settingsCard, cardStyle]}>
               <View style={styles.settingsRow}>
                 <View style={styles.settingsRowText}>
-                  <Text style={styles.postUsername}>Quiet mode</Text>
+                  <Text style={[styles.postUsername, textStyle]}>Quiet mode</Text>
                   <Text style={styles.postLocation}>
                     Mute push notifications for mindful browsing
                   </Text>
@@ -1123,7 +1327,7 @@ export default function App() {
               </View>
               <View style={styles.settingsRow}>
                 <View style={styles.settingsRowText}>
-                  <Text style={styles.postUsername}>Connection requests</Text>
+                  <Text style={[styles.postUsername, textStyle]}>Connection requests</Text>
                   <Text style={styles.postLocation}>
                     Alert when someone asks to connect
                   </Text>
@@ -1136,7 +1340,7 @@ export default function App() {
               </View>
               <View style={styles.settingsRow}>
                 <View style={styles.settingsRowText}>
-                  <Text style={styles.postUsername}>Direct messages</Text>
+                  <Text style={[styles.postUsername, textStyle]}>Direct messages</Text>
                   <Text style={styles.postLocation}>
                     Alert when a friend sends a message
                   </Text>
@@ -1150,9 +1354,9 @@ export default function App() {
             </View>
 
             <Text style={styles.settingsSectionHeader}>Account</Text>
-            <View style={styles.settingsCard}>
+            <View style={[styles.settingsCard, cardStyle]}>
               <View style={styles.settingsRow}>
-                <Text style={styles.postUsername}>Confirmed email</Text>
+                <Text style={[styles.postUsername, textStyle]}>Confirmed email</Text>
                 <Text style={styles.postLocation}>{myProfile.email || myProfile.handle}</Text>
               </View>
               <TouchableOpacity
@@ -1303,15 +1507,125 @@ export default function App() {
         </View>
       </Modal>
 
+      {/* Edit Profile & Photo Modal */}
+      <Modal visible={editProfileModalOpen} transparent animationType="slide">
+        <View style={[styles.storyModal, bgStyle]}>
+          <View style={styles.storyModalHeader}>
+            <Text style={[styles.postUsername, textStyle]}>Edit profile</Text>
+            <TouchableOpacity onPress={() => setEditProfileModalOpen(false)}>
+              <Text style={[styles.closeBtnText, textStyle]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={{ alignItems: 'center', gap: 10 }}>
+            <TouchableOpacity onPress={handlePickProfileAvatar}>
+              {renderAvatarCircle(
+                editAvatarDataUrl || myProfile?.avatar_url,
+                myProfile?.handle,
+                84
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handlePickProfileAvatar}>
+              <Text style={{ color: '#0ea5e9', fontSize: 13, fontWeight: '600' }}>
+                Change profile photo
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <View style={{ gap: 12 }}>
+            <TextInput
+              value={editNameDraft}
+              onChangeText={setEditNameDraft}
+              placeholder="Name"
+              placeholderTextColor="#71717a"
+              style={[styles.igSearchBar, isLight && { backgroundColor: '#f1f5f9', color: '#0f172a' }]}
+            />
+            <TextInput
+              value={editHandleDraft}
+              onChangeText={setEditHandleDraft}
+              placeholder="Username"
+              placeholderTextColor="#71717a"
+              autoCapitalize="none"
+              style={[styles.igSearchBar, isLight && { backgroundColor: '#f1f5f9', color: '#0f172a' }]}
+            />
+            <TextInput
+              value={editBioDraft}
+              onChangeText={setEditBioDraft}
+              placeholder="Bio"
+              placeholderTextColor="#71717a"
+              style={[styles.igSearchBar, isLight && { backgroundColor: '#f1f5f9', color: '#0f172a' }]}
+            />
+            <TouchableOpacity
+              style={styles.primaryAuthBtn}
+              onPress={handleSaveProfileChanges}
+              disabled={uploading}
+            >
+              <Text style={styles.igFollowBtnText}>
+                {uploading ? 'Saving...' : 'Done'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <View />
+        </View>
+      </Modal>
+
+      {/* Report Account Modal */}
+      <Modal visible={Boolean(reportAccountTarget)} transparent animationType="slide">
+        <View style={[styles.storyModal, bgStyle]}>
+          <View style={styles.storyModalHeader}>
+            <Text style={[styles.postUsername, textStyle]}>
+              Report @{reportAccountTarget?.handle}
+            </Text>
+            <TouchableOpacity onPress={() => setReportAccountTarget(null)}>
+              <Text style={[styles.closeBtnText, textStyle]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={{ gap: 10 }}>
+            {[
+              'Inappropriate profile photo or nudity (Immediate removal)',
+              'Harassment, bullying, or threats',
+              'Impersonation or fake account',
+              'Underage user or teen safety concern',
+              'Spam, scam, or misleading link',
+            ].map((reason) => (
+              <TouchableOpacity
+                key={reason}
+                style={[styles.igSearchBar, isLight && { backgroundColor: '#f1f5f9' }]}
+                onPress={() => handleSubmitAccountReport(reason)}
+              >
+                <Text
+                  style={[
+                    styles.postUsername,
+                    textStyle,
+                    reason.includes('nudity') && { color: '#f43f5e' },
+                  ]}
+                >
+                  {reason}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            <View style={[styles.settingsRow, { borderBottomWidth: 0 }]}>
+              <Text style={[styles.postUsername, textStyle]}>
+                Also remove connection / block account
+              </Text>
+              <Switch
+                value={reportBlockToggle}
+                onValueChange={setReportBlockToggle}
+                trackColor={{ false: '#27272a', true: '#0095f6' }}
+              />
+            </View>
+          </View>
+          <View />
+        </View>
+      </Modal>
+
       {/* Bottom Navigation */}
-      <View style={styles.bottomBar}>
+      <View style={[styles.bottomBar, bgStyle, isLight && { borderTopColor: '#e2e8f0' }]}>
         <TouchableOpacity onPress={() => setActiveScreen('main')}>
-          <Text style={[styles.navText, activeScreen === 'main' && styles.navActive]}>
+          <Text style={[styles.navText, activeScreen === 'main' && [styles.navActive, textStyle]]}>
             Home
           </Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => setActiveScreen('search')}>
-          <Text style={[styles.navText, activeScreen === 'search' && styles.navActive]}>
+          <Text style={[styles.navText, activeScreen === 'search' && [styles.navActive, textStyle]]}>
             Search
           </Text>
         </TouchableOpacity>
@@ -1320,7 +1634,7 @@ export default function App() {
             style={[
               styles.navText,
               ['profile', 'settings', 'myPost'].includes(activeScreen) &&
-                styles.navActive,
+                [styles.navActive, textStyle],
             ]}
           >
             Profile

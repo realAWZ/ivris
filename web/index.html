@@ -3,6 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="color-scheme" content="light dark" />
+  <script>
+    (() => {
+      try {
+        const storedScheme = localStorage.getItem('color-scheme');
+        const meta = document.querySelector('meta[name="color-scheme"]');
+        if (storedScheme && ['light', 'dark', 'light dark'].includes(storedScheme)) {
+          if (meta) meta.content = storedScheme;
+        }
+        const resolved = storedScheme === 'light'
+          ? 'light'
+          : storedScheme === 'dark'
+          ? 'dark'
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        document.documentElement.dataset.theme = resolved;
+      } catch (_e) {
+        document.documentElement.dataset.theme = 'dark';
+      }
+    })();
+  </script>
   <meta name="theme-color" content="#000000" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black" />
@@ -14,10 +34,112 @@
   <title>Ivris</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
+    :root {
+      color-scheme: light dark;
+      --ivris-bg: light-dark(#ffffff, #000000);
+      --ivris-surface: light-dark(#f4f4f5, #18181b);
+      --ivris-surface-alt: light-dark(#fafafa, #09090b);
+      --ivris-border: light-dark(#e4e4e7, #27272a);
+      --ivris-text: light-dark(#09090b, #ffffff);
+      --ivris-text-muted: light-dark(#52525b, #a1a1aa);
+    }
+    :root:has(> head > meta[name="color-scheme"][content="dark"]) {
+      color-scheme: dark;
+    }
+    :root:has(> head > meta[name="color-scheme"][content="light"]) {
+      color-scheme: light;
+    }
     body {
-      background-color: #000000;
-      color: #ffffff;
+      background-color: var(--ivris-bg);
+      color: var(--ivris-text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      transition: background-color 0.18s ease, color 0.18s ease;
+    }
+    /* Crisp Instagram-style Light Mode Overrides */
+    html[data-theme="light"] body,
+    html[data-theme="light"] #app-root,
+    html[data-theme="light"] header.bg-black {
+      background-color: #ffffff !important;
+      color: #09090b !important;
+    }
+    html[data-theme="light"] #app-root {
+      border-color: #e4e4e7 !important;
+    }
+    html[data-theme="light"] .bg-zinc-900,
+    html[data-theme="light"] .bg-zinc-900\/70,
+    html[data-theme="light"] .bg-zinc-900\/80,
+    html[data-theme="light"] .bg-zinc-900\/90,
+    html[data-theme="light"] .bg-zinc-900\/60 {
+      background-color: #f4f4f5 !important;
+      color: #09090b !important;
+    }
+    html[data-theme="light"] .bg-zinc-900\/95 {
+      background-color: rgba(255, 255, 255, 0.94) !important;
+      color: #09090b !important;
+    }
+    html[data-theme="light"] .bg-zinc-950 {
+      background-color: #fafafa !important;
+      color: #09090b !important;
+    }
+    html[data-theme="light"] .bg-zinc-800 {
+      background-color: #e4e4e7 !important;
+      color: #18181b !important;
+    }
+    html[data-theme="light"] .border-zinc-900,
+    html[data-theme="light"] .border-zinc-800,
+    html[data-theme="light"] .border-zinc-800\/80,
+    html[data-theme="light"] .border-zinc-800\/70,
+    html[data-theme="light"] .border-zinc-800\/90,
+    html[data-theme="light"] .border-zinc-700 {
+      border-color: #e4e4e7 !important;
+    }
+    html[data-theme="light"] .divide-zinc-900 > :not([hidden]) ~ :not([hidden]),
+    html[data-theme="light"] .divide-zinc-800\/70 > :not([hidden]) ~ :not([hidden]),
+    html[data-theme="light"] .divide-zinc-800\/60 > :not([hidden]) ~ :not([hidden]) {
+      border-color: #e4e4e7 !important;
+    }
+    html[data-theme="light"] #app-root .text-white:not(.bg-sky-500):not(.bg-rose-600):not(.bg-rose-600\/90):not(.bg-\[\#0095f6\]),
+    html[data-theme="light"] dialog:not(#story-viewer-dialog) .text-white:not(.bg-sky-500):not(.bg-rose-600) {
+      color: #09090b !important;
+    }
+    html[data-theme="light"] .text-zinc-200,
+    html[data-theme="light"] .text-zinc-300 {
+      color: #27272a !important;
+    }
+    html[data-theme="light"] .text-zinc-400,
+    html[data-theme="light"] .text-zinc-500 {
+      color: #52525b !important;
+    }
+    html[data-theme="light"] .from-black {
+      --tw-gradient-from: #ffffff var(--tw-gradient-from-position) !important;
+      --tw-gradient-to: rgba(255, 255, 255, 0) var(--tw-gradient-to-position) !important;
+    }
+    html[data-theme="light"] .via-black\/90 {
+      --tw-gradient-to: rgba(255, 255, 255, 0) var(--tw-gradient-to-position) !important;
+      --tw-gradient-stops: var(--tw-gradient-from), rgba(255, 255, 255, 0.92) var(--tw-gradient-via-position), var(--tw-gradient-to) !important;
+    }
+    html[data-theme="light"] .border-black {
+      border-color: #ffffff !important;
+    }
+    html[data-theme="light"] .ig-ring-seen {
+      background: #d4d4d8 !important;
+    }
+    html[data-theme="light"] input[type="checkbox"][switch].ivris-switch {
+      background-color: #e4e4e7;
+      border-color: #d4d4d8;
+    }
+    html[data-theme="light"] input[type="checkbox"][switch].ivris-switch:checked {
+      background-color: #0095f6;
+      border-color: #0095f6;
+    }
+    /* Keep full-screen Story Viewer dark like Instagram */
+    html[data-theme="light"] #story-viewer-dialog,
+    html[data-theme="light"] #story-viewer-dialog .bg-black {
+      background-color: #000000 !important;
+      color: #ffffff !important;
+    }
+    html[data-theme="light"] #story-viewer-dialog .text-white {
+      color: #ffffff !important;
     }
     /* Modal scroll containment (per modern-web-guidance: dialog) */
     dialog:modal {
@@ -338,9 +460,14 @@
           <div id="edit-avatar-preview-box" class="w-full h-full flex items-center justify-center"></div>
         </button>
         <input id="edit-avatar-input" type="file" accept="image/*" class="hidden" onchange="handleEditAvatarFileChange(this)" />
-        <button type="button" onclick="document.getElementById('edit-avatar-input').click()" class="text-xs font-semibold text-sky-400 hover:text-sky-300">
-          Change profile photo
-        </button>
+        <div class="flex items-center gap-3">
+          <button type="button" onclick="document.getElementById('edit-avatar-input').click()" class="text-xs font-semibold text-sky-400 hover:text-sky-300">
+            Change profile photo
+          </button>
+          <button id="remove-avatar-btn" type="button" onclick="handleStageRemoveAvatar()" class="hidden text-xs font-semibold text-rose-400 hover:text-rose-300">
+            Remove photo
+          </button>
+        </div>
       </div>
 
       <div class="space-y-3">
@@ -506,7 +633,7 @@
       </div>
       <p class="text-xs text-zinc-400">Why are you reporting this post? Nudity and explicit content are immediately deleted.</p>
       <div class="space-y-2">
-        <button type="button" onclick="submitPostReport('Nudity or explicit sexual content')" class="w-full p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-left text-xs font-semibold text-rose-300 hover:bg-rose-500/25">
+        <button type="button" onclick="submitPostReport('Nudity or explicit sexual content')" class="w-full p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-left text-xs font-semibold text-rose-400 hover:bg-rose-500/25">
           Nudity or explicit content (Immediate deletion)
         </button>
         <button type="button" onclick="submitPostReport('Harassment or bullying')" class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-left text-xs font-medium text-white hover:bg-zinc-800">
@@ -519,6 +646,41 @@
           Spam or misleading
         </button>
       </div>
+    </div>
+  </dialog>
+
+  <!-- Report Account / Safety Modal (Light-Dismiss enabled via closedby="any") -->
+  <dialog id="report-account-dialog" closedby="any" aria-labelledby="report-account-title" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
+    <div class="space-y-4">
+      <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+        <h3 id="report-account-title" class="text-sm font-semibold">Report Account</h3>
+        <button type="button" onclick="document.getElementById('report-account-dialog').close()" class="text-xs text-zinc-400 hover:text-white">Cancel</button>
+      </div>
+      <p class="text-xs text-zinc-400">
+        Why are you reporting <span id="report-account-handle-label" class="font-semibold text-white"></span>? Reports are confidential and help keep Ivris safe for teens and adults.
+      </p>
+      <div class="space-y-2">
+        <button type="button" onclick="submitAccountReport('Inappropriate profile photo or nudity')" class="w-full p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-left text-xs font-semibold text-rose-400 hover:bg-rose-500/25">
+          Inappropriate profile photo or nudity (Immediate removal)
+        </button>
+        <button type="button" onclick="submitAccountReport('Harassment, bullying, or threats')" class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-left text-xs font-medium text-white hover:bg-zinc-800">
+          Harassment, bullying, or threats
+        </button>
+        <button type="button" onclick="submitAccountReport('Impersonation or fake account')" class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-left text-xs font-medium text-white hover:bg-zinc-800">
+          Impersonation or fake account
+        </button>
+        <button type="button" onclick="submitAccountReport('Underage user or teen safety concern')" class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-left text-xs font-medium text-white hover:bg-zinc-800">
+          Underage user or teen safety concern
+        </button>
+        <button type="button" onclick="submitAccountReport('Spam, scam, or misleading link')" class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-left text-xs font-medium text-white hover:bg-zinc-800">
+          Spam, scam, or misleading link
+        </button>
+      </div>
+      <textarea id="report-account-details" rows="2" placeholder="Additional context (optional)..." class="w-full p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none"></textarea>
+      <label class="flex items-center justify-between gap-3 pt-1 cursor-pointer">
+        <span class="text-xs text-zinc-300 font-medium">Also remove connection / block account</span>
+        <input id="report-account-block-toggle" type="checkbox" switch class="ivris-switch" checked />
+      </label>
     </div>
   </dialog>
 
@@ -696,11 +858,47 @@
       storyQueueIdx: 0,
       storyIsOwn: false,
       reportingPostId: '',
+      reportingAccountId: '',
+      reportingAccountHandle: '',
       moderationDashboard: null,
       modTab: 'reports',
+      modAccountSearch: '',
       modBanner: '',
+      colorScheme: localStorage.getItem('color-scheme') || 'light dark',
       isMuted: localStorage.getItem('ivris_is_muted') === '1'
     };
+
+    function setColorScheme(mode) {
+      const valid = ['light', 'dark', 'light dark'].includes(mode) ? mode : 'light dark';
+      appState.colorScheme = valid;
+      try {
+        localStorage.setItem('color-scheme', valid);
+      } catch (_e) {}
+      const meta = document.querySelector('meta[name="color-scheme"]');
+      if (meta) meta.content = valid;
+      const resolved = valid === 'light'
+        ? 'light'
+        : valid === 'dark'
+        ? 'dark'
+        : (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.dataset.theme = resolved;
+      const themeMeta = document.querySelector('meta[name="theme-color"]');
+      if (themeMeta) themeMeta.content = resolved === 'light' ? '#ffffff' : '#000000';
+      render();
+    }
+
+    function toggleQuickTheme() {
+      const currentResolved = document.documentElement.dataset.theme || 'dark';
+      setColorScheme(currentResolved === 'dark' ? 'light' : 'dark');
+    }
+
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+        if ((localStorage.getItem('color-scheme') || 'light dark') === 'light dark') {
+          setColorScheme('light dark');
+        }
+      });
+    }
 
     let activeAudioEl = null;
     let activeStoryAudioEl = null;
@@ -720,7 +918,7 @@
       const url = entity?.avatar_url || '';
       const initials = ((entity?.handle || entity?.display_name || 'U').replace('@', '').slice(0, 2) || 'U').toUpperCase();
       if (url) {
-        return `<img src="${escapeAttr(url)}" alt="" class="w-full h-full rounded-full object-cover" />`;
+        return `<img src="${escapeAttr(url)}" alt="" class="w-full h-full rounded-full object-cover" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='inline';" /><span style="display:none;" class="${textSizeClass} font-bold text-white select-none">${escapeAttr(initials)}</span>`;
       }
       return `<span class="${textSizeClass} font-bold text-white select-none">${escapeAttr(initials)}</span>`;
     }
@@ -892,7 +1090,7 @@
           const img = new Image();
           img.onerror = reject;
           img.onload = () => {
-            const size = 360;
+            const size = 512;
             const canvas = document.createElement('canvas');
             canvas.width = size;
             canvas.height = size;
@@ -901,7 +1099,7 @@
             const sx = (img.width - minSide) / 2;
             const sy = (img.height - minSide) / 2;
             ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
-            resolve(canvas.toDataURL('image/jpeg', 0.86));
+            resolve(canvas.toDataURL('image/jpeg', 0.88));
           };
           img.src = reader.result;
         };
@@ -914,7 +1112,9 @@
       if (!file || !appState.user) return;
       try {
         const dataUrl = await cropAndCompressAvatar(file);
-        await apiFetch('/api/update-profile', {
+        appState.user.avatar_url = dataUrl;
+        render();
+        const res = await apiFetch('/api/update-profile', {
           method: 'POST',
           body: JSON.stringify({
             display_name: appState.user.display_name,
@@ -923,10 +1123,14 @@
             avatar_data_url: dataUrl
           })
         });
+        if (res.token || res.user) {
+          persistAuthSession(res.token || appState.token, res.user || appState.user);
+        }
         inputEl.value = '';
         await loadLiveData();
       } catch (err) {
         alert(err.message || 'Could not update profile picture');
+        await loadLiveData();
       }
     }
 
@@ -936,22 +1140,44 @@
       try {
         const dataUrl = await cropAndCompressAvatar(file);
         appState.pendingAvatarDataUrl = dataUrl;
+        appState.pendingRemoveAvatar = false;
         const box = document.getElementById('edit-avatar-preview-box');
         if (box) {
           box.innerHTML = `<img src="${escapeAttr(dataUrl)}" alt="New profile preview" class="w-full h-full rounded-full object-cover" />`;
         }
+        const remBtn = document.getElementById('remove-avatar-btn');
+        if (remBtn) remBtn.classList.remove('hidden');
       } catch (_e) {}
+    }
+
+    function handleStageRemoveAvatar() {
+      appState.pendingAvatarDataUrl = '';
+      appState.pendingRemoveAvatar = true;
+      const inputEl = document.getElementById('edit-avatar-input');
+      if (inputEl) inputEl.value = '';
+      const box = document.getElementById('edit-avatar-preview-box');
+      if (box && appState.user) {
+        box.innerHTML = `<span class="font-bold text-lg select-none">${escapeAttr((appState.user.handle || 'U').slice(0, 2).toUpperCase())}</span>`;
+      }
+      const remBtn = document.getElementById('remove-avatar-btn');
+      if (remBtn) remBtn.classList.add('hidden');
     }
 
     function openEditProfileModal() {
       if (!appState.user) return;
       stopPreviewAudio();
       appState.pendingAvatarDataUrl = '';
+      appState.pendingRemoveAvatar = false;
       const inputEl = document.getElementById('edit-avatar-input');
       if (inputEl) inputEl.value = '';
       const box = document.getElementById('edit-avatar-preview-box');
       if (box) {
         box.innerHTML = renderAvatarInner(appState.user, 'text-lg');
+      }
+      const remBtn = document.getElementById('remove-avatar-btn');
+      if (remBtn) {
+        if (appState.user.avatar_url) remBtn.classList.remove('hidden');
+        else remBtn.classList.add('hidden');
       }
       document.getElementById('edit-display-name').value = appState.user.display_name || '';
       document.getElementById('edit-handle').value = appState.user.handle || '';
@@ -961,6 +1187,11 @@
 
     async function handleSaveProfile(e) {
       e.preventDefault();
+      const saveBtn = document.getElementById('save-profile-btn');
+      if (saveBtn) {
+        saveBtn.textContent = 'Saving...';
+        saveBtn.disabled = true;
+      }
       try {
         const payload = {
           display_name: document.getElementById('edit-display-name').value,
@@ -969,16 +1200,27 @@
         };
         if (appState.pendingAvatarDataUrl) {
           payload.avatar_data_url = appState.pendingAvatarDataUrl;
+        } else if (appState.pendingRemoveAvatar) {
+          payload.remove_avatar = true;
         }
-        await apiFetch('/api/update-profile', {
+        const res = await apiFetch('/api/update-profile', {
           method: 'POST',
           body: JSON.stringify(payload)
         });
+        if (res.token || res.user) {
+          persistAuthSession(res.token || appState.token, res.user || appState.user);
+        }
         appState.pendingAvatarDataUrl = '';
+        appState.pendingRemoveAvatar = false;
         document.getElementById('edit-profile-dialog').close();
         await loadLiveData();
       } catch (err) {
         alert(err.message || 'Could not update profile');
+      } finally {
+        if (saveBtn) {
+          saveBtn.textContent = 'Done';
+          saveBtn.disabled = false;
+        }
       }
     }
 
@@ -2033,6 +2275,61 @@
       }
     }
 
+    function openReportAccountModal(userId, handle) {
+      if (!userId) return;
+      appState.reportingAccountId = userId;
+      appState.reportingAccountHandle = (handle || 'user').replace('@', '');
+      const labelEl = document.getElementById('report-account-handle-label');
+      if (labelEl) labelEl.textContent = '@' + appState.reportingAccountHandle;
+      const detailsEl = document.getElementById('report-account-details');
+      if (detailsEl) detailsEl.value = '';
+      const blockToggle = document.getElementById('report-account-block-toggle');
+      if (blockToggle) blockToggle.checked = true;
+      document.getElementById('report-account-dialog').showModal();
+    }
+
+    async function submitAccountReport(reason) {
+      const targetId = appState.reportingAccountId;
+      if (!targetId) return;
+      const details = (document.getElementById('report-account-details')?.value || '').trim();
+      const blockUser = Boolean(document.getElementById('report-account-block-toggle')?.checked);
+      try {
+        const res = await apiFetch('/api/report', {
+          method: 'POST',
+          body: JSON.stringify({
+            report_type: 'account',
+            target_user_id: targetId,
+            reason,
+            details,
+            block_user: blockUser
+          })
+        });
+        document.getElementById('report-account-dialog').close();
+        alert(res.message || 'Account report submitted to Ivris Trust & Safety.');
+        await loadLiveData();
+      } catch (err) {
+        alert(err.message || 'Could not submit account report');
+      }
+    }
+
+    async function modClearUserProfile(userId, handle, clearAvatar = true, clearBio = false) {
+      try {
+        await apiFetch('/api/moderation/clear-profile', {
+          method: 'POST',
+          body: JSON.stringify({
+            user_id: userId,
+            clear_avatar: clearAvatar,
+            clear_bio: clearBio,
+            reason: `Profile ${clearAvatar && clearBio ? 'photo & bio' : (clearAvatar ? 'photo' : 'bio')} cleared by moderator for @${handle}`
+          })
+        });
+        appState.modBanner = `Cleared profile ${clearAvatar && clearBio ? 'photo & bio' : (clearAvatar ? 'photo' : 'bio')} for @${handle}.`;
+        await loadLiveData();
+      } catch (err) {
+        alert(err.message || 'Could not clear profile content');
+      }
+    }
+
     // In-App Moderator Actions (when signed in as @moderator)
     async function modSyncWithUpstream() {
       const btn = document.getElementById('btn-sync-upstream');
@@ -2405,15 +2702,19 @@
     }
 
     function renderModeratorConsole() {
-      const d = appState.moderationDashboard || { reports: [], active_posts: [], logs: [], users: [], institution_applications: [] };
-      const openReports = (d.reports || []).filter(r => r.status === 'open');
+      const d = appState.moderationDashboard || { reports: [], account_reports: [], all_reports: [], active_posts: [], logs: [], users: [], institution_applications: [] };
+      const postReports = d.reports || [];
+      const accountReports = d.account_reports || [];
+      const openPostReports = postReports.filter(r => r.status === 'open');
+      const openAccountReports = accountReports.filter(r => r.status === 'open');
+      const totalOpenReports = openPostReports.length + openAccountReports.length;
       const tab = appState.modTab;
       const tabBtn = (id, label) => `
-        <button onclick="appState.modTab='${id}';render()" class="px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap ${tab === id ? 'bg-white text-black' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">${label}</button>
+        <button onclick="appState.modTab='${id}';render()" class="px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap ${tab === id ? 'bg-sky-500 text-white' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">${label}</button>
       `;
       let content = '';
       if (tab === 'reports') {
-        content = openReports.length === 0 ? `<p class="py-12 text-center text-xs text-zinc-500">No open reports. Nudity reports are deleted automatically.</p>` : openReports.map(r => `
+        content = openPostReports.length === 0 ? `<p class="py-12 text-center text-xs text-zinc-500">No open post reports. Nudity reports are deleted automatically.</p>` : openPostReports.map(r => `
           <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800 flex gap-3">
             ${r.media_url ? `<img src="${escapeAttr(r.media_url)}" alt="" class="w-20 h-20 rounded-xl object-cover bg-zinc-800 shrink-0" />` : `<div class="w-20 h-20 rounded-xl bg-zinc-800 shrink-0"></div>`}
             <div class="min-w-0 flex-1 space-y-1.5">
@@ -2427,6 +2728,39 @@
             </div>
           </div>
         `).join('');
+      } else if (tab === 'account_reports') {
+        content = accountReports.length === 0 ? `<p class="py-12 text-center text-xs text-zinc-500">No account reports submitted yet.</p>` : accountReports.map(r => {
+          const isOpen = r.status === 'open';
+          return `
+            <div class="p-3.5 rounded-2xl bg-zinc-900/70 border border-zinc-800 space-y-2.5">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2.5 min-w-0">
+                  <div class="w-10 h-10 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                    ${renderAvatarInner({ handle: r.target_user_handle || r.author_handle, display_name: r.target_user_name, avatar_url: r.target_user_avatar }, 'text-xs')}
+                  </div>
+                  <div class="min-w-0">
+                    <p class="text-xs font-bold truncate">@${escapeAttr(r.target_user_handle || r.author_handle || 'removed')}</p>
+                    <p class="text-[11px] text-zinc-400 truncate">${escapeAttr(r.target_user_name || '')} · ${escapeAttr(r.target_user_email || '')}</p>
+                  </div>
+                </div>
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${isOpen ? 'bg-amber-500/20 text-amber-400' : 'bg-zinc-800 text-zinc-400'}">${escapeAttr(r.status)}</span>
+              </div>
+              <div class="space-y-1">
+                <p class="text-xs font-semibold text-rose-400">${escapeAttr(r.reason)}</p>
+                ${r.details ? `<p class="text-xs text-zinc-300">${escapeAttr(r.details)}</p>` : ''}
+                ${r.target_user_bio ? `<p class="text-[11px] text-zinc-400 italic">Bio: "${escapeAttr(r.target_user_bio)}"</p>` : ''}
+                <p class="text-[11px] text-zinc-500">Reported by @${escapeAttr(r.reporter_handle || 'user')} · ${formatRelativeShort(r.created_at)} ago</p>
+              </div>
+              ${isOpen && r.target_user_id ? `
+                <div class="flex flex-wrap gap-2 pt-1">
+                  <button onclick="modClearUserProfile('${r.target_user_id}', '${escapeAttr(r.target_user_handle || 'user')}', true, true)" class="px-3 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-semibold">Clear Photo & Bio</button>
+                  <button onclick="if(confirm('Permanently remove @${escapeAttr(r.target_user_handle || 'user')} and all their posts?'))modDeleteUser('${r.target_user_id}', '${escapeAttr(r.target_user_handle || 'user')}')" class="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold">Remove Account</button>
+                  <button onclick="modDismissReport('${r.id}')" class="px-3 py-1.5 rounded-lg bg-zinc-800 text-xs font-semibold">Dismiss</button>
+                </div>
+              ` : ''}
+            </div>
+          `;
+        }).join('');
       } else if (tab === 'posts') {
         content = (d.active_posts || []).length === 0 ? `<p class="py-12 text-center text-xs text-zinc-500">No posts on Ivris yet.</p>` : `
           <div class="grid grid-cols-2 gap-2">
@@ -2436,7 +2770,10 @@
                   ? `<video src="${escapeAttr(p.media_url)}" muted playsinline class="w-full aspect-square object-cover bg-zinc-800"></video>`
                   : `<img src="${escapeAttr(p.media_url)}" alt="" class="w-full aspect-square object-cover bg-zinc-800" />`}
                 <div class="p-2.5 space-y-1.5">
-                  <p class="text-xs font-semibold truncate">@${escapeAttr(p.author_handle)}</p>
+                  <div class="flex items-center gap-1.5 min-w-0">
+                    <div class="w-5 h-5 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">${renderAvatarInner({ handle: p.author_handle, avatar_url: p.author_avatar_url }, 'text-[9px]')}</div>
+                    <p class="text-xs font-semibold truncate">@${escapeAttr(p.author_handle)}</p>
+                  </div>
                   <p class="text-[11px] text-zinc-400 truncate">${p.media_kind === 'video_story' ? 'Story' : 'Post'} · ${formatRelativeShort(p.created_at)} ago</p>
                   <button onclick="modTakeDownPost('${p.id}', 'Immediate moderator takedown')" class="w-full py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold">Take down</button>
                 </div>
@@ -2445,24 +2782,56 @@
           </div>
         `;
       } else if (tab === 'users') {
-        content = (d.users || []).map(u => `
-          <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800 flex items-center justify-between gap-3">
-            <div class="flex items-center gap-2.5 min-w-0">
-              <div class="w-9 h-9 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">${renderAvatarInner(u, 'text-xs')}</div>
-              <div class="min-w-0">
-                <div class="flex items-center gap-1.5 flex-wrap">
-                  <p class="text-xs font-semibold truncate">@${escapeAttr(u.handle)}</p>
-                  ${u.email_confirmed
-                    ? '<span class="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[9px] font-semibold">Verified</span>'
-                    : '<span class="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[9px] font-semibold">Pending Verification</span>'}
-                  ${u.is_verified_institution ? '<span class="px-1.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300 text-[9px] font-semibold">Institution</span>' : ''}
+        const q = (appState.modAccountSearch || '').toLowerCase();
+        const filteredUsers = (d.users || []).filter(u =>
+          !q ||
+          (u.handle || '').toLowerCase().includes(q) ||
+          (u.display_name || '').toLowerCase().includes(q) ||
+          (u.email || '').toLowerCase().includes(q)
+        );
+        content = `
+          <div class="pb-1">
+            <input
+              type="text"
+              value="${escapeAttr(appState.modAccountSearch)}"
+              oninput="appState.modAccountSearch=this.value;render()"
+              placeholder="Search accounts by @handle, name, or email..."
+              class="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none"
+            />
+          </div>
+          ${filteredUsers.map(u => `
+            <div class="p-3.5 rounded-2xl bg-zinc-900/70 border border-zinc-800 space-y-2.5">
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2.5 min-w-0">
+                  <div class="w-11 h-11 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">${renderAvatarInner(u, 'text-xs')}</div>
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                      <p class="text-xs font-bold truncate">@${escapeAttr(u.handle)}</p>
+                      ${u.email_confirmed
+                        ? '<span class="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[9px] font-semibold">✓ Verified</span>'
+                        : '<span class="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 text-[9px] font-semibold">! Unverified</span>'}
+                      ${u.is_verified_institution ? '<span class="px-1.5 py-0.5 rounded-full bg-sky-500/20 text-sky-400 text-[9px] font-semibold">Institution</span>' : ''}
+                      ${u.open_reports_count > 0 ? `<span class="px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-400 text-[9px] font-bold">${u.open_reports_count} Report(s)</span>` : ''}
+                    </div>
+                    <p class="text-[11px] text-zinc-400 truncate">${escapeAttr(u.display_name || '')} · ${escapeAttr(u.email)}</p>
+                    <p class="text-[11px] text-zinc-500">${u.posts_count || 0} posts · ${u.friends_count || 0} friends · Joined ${formatRelativeShort(u.created_at)} ago</p>
+                  </div>
                 </div>
-                <p class="text-[11px] text-zinc-400 truncate">${escapeAttr(u.email)} · ${escapeAttr(u.display_name || '')} · Joined ${formatRelativeShort(u.created_at)} ago</p>
+              </div>
+              ${u.bio ? `<p class="text-xs text-zinc-300 bg-zinc-950/60 p-2 rounded-lg border border-zinc-800/70">Bio: ${escapeAttr(u.bio)}</p>` : ''}
+              <div class="flex flex-wrap gap-2">
+                ${(u.avatar_url || u.bio) ? `
+                  <button onclick="modClearUserProfile('${u.id}', '${escapeAttr(u.handle)}', true, Boolean('${escapeAttr(u.bio || '')}'))" class="px-2.5 py-1.5 rounded-lg bg-zinc-800 text-xs font-semibold">
+                    Clear Photo/Bio
+                  </button>
+                ` : ''}
+                <button onclick="if(confirm('Remove @${escapeAttr(u.handle)} and all their posts?'))modDeleteUser('${u.id}', '${escapeAttr(u.handle)}')" class="px-3 py-1.5 rounded-lg bg-rose-600/90 text-white text-xs font-semibold">
+                  Remove Account
+                </button>
               </div>
             </div>
-            <button onclick="if(confirm('Remove @${escapeAttr(u.handle)} and all their posts?'))modDeleteUser('${u.id}', '${escapeAttr(u.handle)}')" class="px-3 py-1.5 rounded-lg bg-rose-600/90 text-white text-xs font-semibold shrink-0">Remove</button>
-          </div>
-        `).join('') || `<p class="py-12 text-center text-xs text-zinc-500">No accounts.</p>`;
+          `).join('') || `<p class="py-12 text-center text-xs text-zinc-500">No matching accounts.</p>`}
+        `;
       } else if (tab === 'institutions') {
         const apps = d.institution_applications || [];
         content = apps.length === 0 ? `<p class="py-12 text-center text-xs text-zinc-500">No institution applications.</p>` : apps.map(a => `
@@ -2471,7 +2840,7 @@
             <p class="text-[11px] text-zinc-400">${escapeAttr(a.official_domain)} · ${escapeAttr(a.contact_email)}</p>
             ${a.notes ? `<p class="text-[11px] text-zinc-300">${escapeAttr(a.notes)}</p>` : ''}
             ${a.status === 'approved'
-              ? `<span class="inline-block px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 text-[11px] font-semibold">Approved</span>`
+              ? `<span class="inline-block px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold">Approved</span>`
               : `<button onclick="modApproveInstitution('${a.id}')" class="px-3 py-1.5 rounded-lg bg-sky-500 text-white text-xs font-semibold">Approve & verify</button>`}
           </div>
         `).join('');
@@ -2490,15 +2859,15 @@
                 <span class="text-[11px] text-zinc-400 font-mono">${escapeAttr(dbInfo.size_human || '')}</span>
               </div>
               <div class="grid grid-cols-3 gap-2 text-center pt-1">
-                <div class="p-2.5 rounded-xl bg-black/40 border border-zinc-800/80">
+                <div class="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800/80">
                   <p class="text-base font-bold text-white">${dbInfo.users_count !== undefined ? dbInfo.users_count : (d.users || []).length}</p>
                   <p class="text-[10px] text-zinc-400">Total Users</p>
                 </div>
-                <div class="p-2.5 rounded-xl bg-black/40 border border-zinc-800/80">
+                <div class="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800/80">
                   <p class="text-base font-bold text-white">${dbInfo.posts_count !== undefined ? dbInfo.posts_count : (d.active_posts || []).length}</p>
                   <p class="text-[10px] text-zinc-400">Live Posts</p>
                 </div>
-                <div class="p-2.5 rounded-xl bg-black/40 border border-zinc-800/80">
+                <div class="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800/80">
                   <p class="text-base font-bold text-white">${backups.length}</p>
                   <p class="text-[10px] text-zinc-400">Snapshots</p>
                 </div>
@@ -2507,12 +2876,12 @@
             </div>
 
             <div class="space-y-2">
-              <button id="btn-sync-upstream" onclick="modSyncWithUpstream()" class="w-full py-2.5 px-3 rounded-xl bg-sky-500/20 border border-sky-500/40 text-xs font-semibold text-sky-300 active:scale-95 transition flex items-center justify-center gap-1.5">
+              <button id="btn-sync-upstream" onclick="modSyncWithUpstream()" class="w-full py-2.5 px-3 rounded-xl bg-sky-500/20 border border-sky-500/40 text-xs font-semibold text-sky-400 active:scale-95 transition flex items-center justify-center gap-1.5">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
                 <span>Sync with Cloud Server (https://ivris.onrender.com)</span>
               </button>
 
-              <a href="/api/admin/backup/download" download class="w-full py-3 px-4 rounded-xl bg-white text-black font-semibold text-xs flex items-center justify-center gap-2 shadow-lg active:scale-[0.98] transition">
+              <a href="/api/admin/backup/download" download class="w-full py-3 px-4 rounded-xl bg-sky-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg active:scale-[0.98] transition">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 <span>Download Live Database (.db)</span>
               </a>
@@ -2539,7 +2908,7 @@
                       <div class="min-w-0">
                         <div class="flex items-center gap-2">
                           <p class="text-xs font-semibold truncate text-zinc-200">${escapeAttr(bk.filename)}</p>
-                          ${bk.is_latest_pointer ? `<span class="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 text-[9px] font-bold">LATEST</span>` : ''}
+                          ${bk.is_latest_pointer ? `<span class="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-400 text-[9px] font-bold">LATEST</span>` : ''}
                         </div>
                         <p class="text-[11px] text-zinc-500">${escapeAttr(bk.created_at_iso || '')} · ${escapeAttr(bk.size_human || '')} · ${bk.users_count || 0} users</p>
                       </div>
@@ -2547,7 +2916,7 @@
                         <a href="/api/admin/backup/download?filename=${encodeURIComponent(bk.filename)}" download class="p-2 rounded-lg bg-zinc-800 text-zinc-300 text-xs hover:text-white" title="Download snapshot">
                           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                         </a>
-                        <button onclick="if(confirm('Restore database from ${escapeAttr(bk.filename)}? This will replace current active state with this snapshot.'))modRestoreNamedBackup('${escapeAttr(bk.filename)}')" class="px-2.5 py-1.5 rounded-lg bg-rose-600/20 border border-rose-500/30 text-rose-300 text-xs font-semibold hover:bg-rose-600 hover:text-white transition">
+                        <button onclick="if(confirm('Restore database from ${escapeAttr(bk.filename)}?'))modRestoreNamedBackup('${escapeAttr(bk.filename)}')" class="px-2.5 py-1.5 rounded-lg bg-rose-600/20 border border-rose-500/30 text-rose-400 text-xs font-semibold hover:bg-rose-600 hover:text-white transition">
                           Restore
                         </button>
                       </div>
@@ -2562,7 +2931,7 @@
         content = (d.logs || []).map(l => `
           <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800 space-y-1">
             <div class="flex items-center justify-between gap-2">
-              <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold ${l.action === 'auto_deleted_nudity' ? 'bg-rose-500/20 text-rose-300' : 'bg-sky-500/20 text-sky-300'}">${escapeAttr(l.action.replace(/_/g, ' '))}</span>
+              <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold ${l.action.includes('nudity') || l.action.includes('remove') ? 'bg-rose-500/20 text-rose-400' : 'bg-sky-500/20 text-sky-400'}">${escapeAttr(l.action.replace(/_/g, ' '))}</span>
               <span class="text-[11px] text-zinc-500">${formatRelativeShort(l.created_at)} ago</span>
             </div>
             <p class="text-xs text-zinc-300">@${escapeAttr(l.author_handle || 'unknown')} · ${escapeAttr(l.reason)}</p>
@@ -2574,33 +2943,39 @@
         <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black z-20">
           <div>
             <h1 id="screen-heading" tabindex="-1" class="text-lg font-bold focus:outline-none" style="font-family: Georgia, serif;">Ivris Moderation</h1>
-            <p class="text-[11px] text-zinc-400">@${escapeAttr(appState.user.handle)} · Nudity auto-delete on</p>
+            <p class="text-[11px] text-zinc-400">@${escapeAttr(appState.user.handle)} · Teen & Adult Safety Active</p>
           </div>
-          <button onclick="signOut()" class="px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs font-semibold">Log out</button>
+          <div class="flex items-center gap-1.5">
+            <button onclick="toggleQuickTheme()" aria-label="Toggle Light/Dark Mode" class="px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs font-semibold">
+              ${(document.documentElement.dataset.theme || 'dark') === 'light' ? '🌙 Dark' : '☀️ Light'}
+            </button>
+            <button onclick="signOut()" class="px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs font-semibold">Log out</button>
+          </div>
         </header>
         <main class="flex-1 px-4 py-4 space-y-4 pb-10">
           ${appState.modBanner ? `
-            <div role="status" class="p-3 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-300 text-xs flex items-center justify-between gap-2">
+            <div role="status" class="p-3 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-400 text-xs flex items-center justify-between gap-2">
               <span>${escapeAttr(appState.modBanner)}</span>
               <button onclick="appState.modBanner='';render()" class="text-zinc-400">✕</button>
             </div>
           ` : ''}
           <div class="grid grid-cols-3 gap-2 text-center">
-            <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800"><p class="text-lg font-bold">${openReports.length}</p><p class="text-[11px] text-zinc-400">Open reports</p></div>
+            <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800"><p class="text-lg font-bold">${totalOpenReports}</p><p class="text-[11px] text-zinc-400">Open reports</p></div>
+            <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800"><p class="text-lg font-bold">${(d.users || []).length}</p><p class="text-[11px] text-zinc-400">Accounts</p></div>
             <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800"><p class="text-lg font-bold">${(d.active_posts || []).length}</p><p class="text-[11px] text-zinc-400">Live posts</p></div>
-            <div class="p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800"><p class="text-lg font-bold">${(d.logs || []).filter(l => l.action === 'auto_deleted_nudity').length}</p><p class="text-[11px] text-zinc-400">Auto-deleted</p></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
             <button onclick="modRunNuditySweep()" class="py-2.5 rounded-xl bg-rose-600 text-white text-xs font-semibold">Scan & delete nudity</button>
             <button onclick="loadLiveData()" class="py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-semibold">Refresh</button>
           </div>
           <nav class="flex gap-2 overflow-x-auto no-scrollbar">
-            ${tabBtn('reports', `Reports (${openReports.length})`)}
-            ${tabBtn('posts', 'All posts')}
-            ${tabBtn('users', 'Accounts')}
+            ${tabBtn('reports', `Post Reports (${openPostReports.length})`)}
+            ${tabBtn('account_reports', `Account Reports (${openAccountReports.length})`)}
+            ${tabBtn('users', `Accounts (${(d.users || []).length})`)}
+            ${tabBtn('posts', `Posts (${(d.active_posts || []).length})`)}
             ${tabBtn('institutions', 'Institutions')}
-            ${tabBtn('backups', 'Database & Backups')}
-            ${tabBtn('logs', 'Log')}
+            ${tabBtn('backups', 'Database & Vault')}
+            ${tabBtn('logs', 'Audit Log')}
           </nav>
           <div class="space-y-2.5">${content}</div>
         </main>
@@ -2654,7 +3029,12 @@
       // 1B. Sign In / Sign Up Screen ("Apply for an Institution Account" appears ONLY on Sign Up)
       if (!appState.user) {
         root.innerHTML = `
-          <div class="my-auto px-7 py-12 space-y-6">
+          <div class="px-4 pt-4 flex justify-end">
+            <button type="button" onclick="toggleQuickTheme()" aria-label="Toggle Light/Dark Mode" class="px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-xs font-semibold">
+              ${(document.documentElement.dataset.theme || 'dark') === 'light' ? '🌙 Dark mode' : '☀️ Light mode'}
+            </button>
+          </div>
+          <div class="my-auto px-7 py-8 space-y-6">
             <div class="text-center space-y-1.5">
               <h1 id="screen-heading" tabindex="-1" class="text-3xl font-bold tracking-tight" style="font-family: Georgia, serif;">Ivris</h1>
             </div>
@@ -2749,6 +3129,15 @@
           : appState.screen === 'chat'
           ? escapeAttr(appState.activeChatPartner?.display_name || 'Chat')
           : 'Messages';
+        const rightActionHtml = appState.screen === 'userProfile' && appState.selectedUserProfile
+          ? `<button onclick="openReportAccountModal('${escapeAttr(appState.selectedUserProfile.id)}', '${escapeAttr(appState.selectedUserProfile.handle)}')" aria-label="Report or block @${escapeAttr(appState.selectedUserProfile.handle)}" class="nav-touch-target -mr-2 text-zinc-400 hover:text-rose-400">
+               <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+             </button>`
+          : appState.screen === 'chat' && appState.activeChatPartner
+          ? `<button onclick="openReportAccountModal('${escapeAttr(appState.activeChatPartner.id)}', '${escapeAttr(appState.activeChatPartner.handle)}')" aria-label="Report or block @${escapeAttr(appState.activeChatPartner.handle)}" class="nav-touch-target -mr-2 text-zinc-400 hover:text-rose-400">
+               <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+             </button>`
+          : `<div class="w-12"></div>`;
         headerHtml = `
           <header class="px-4 safe-top-header border-b border-zinc-900 flex items-center justify-between sticky top-0 bg-black z-20">
             <button onclick="navigate('${backTarget}')" class="nav-touch-target text-sm font-semibold flex items-center gap-1 -ml-2">
@@ -2758,7 +3147,7 @@
             <h1 id="screen-heading" tabindex="-1" class="text-base font-bold focus:outline-none">
               ${headingText}
             </h1>
-            <div class="w-12"></div>
+            ${rightActionHtml}
           </header>
         `;
       } else {
@@ -2970,22 +3359,27 @@
                   : 'Requested';
 
                 return `
-                  <div class="py-3 px-4 flex items-center justify-between gap-3">
+                  <div class="py-3 px-4 flex items-center justify-between gap-2">
                     <button type="button" onclick="openUserProfile('${item.id}')" class="flex items-center gap-3 min-w-0 flex-1 text-left hover:opacity-85">
                       <div class="w-11 h-11 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
                         ${renderAvatarInner(item, 'text-xs')}
                       </div>
                       <div class="min-w-0">
                         <div class="flex items-center gap-1">
-                          <span class="text-xs font-semibold truncate">${item.handle}</span>
+                          <span class="text-xs font-semibold truncate">${escapeAttr(item.handle)}</span>
                           ${item.is_verified_institution ? VERIFIED_SVG : ''}
                         </div>
-                        <p class="text-xs text-zinc-400 truncate">${item.display_name}</p>
+                        <p class="text-xs text-zinc-400 truncate">${escapeAttr(item.display_name)}</p>
                       </div>
                     </button>
-                    <button onclick="handleConnectionClick('${item.id}')" class="h-8 px-4 rounded-lg bg-sky-500 text-white text-xs font-semibold whitespace-nowrap shrink-0">
-                      ${label}
-                    </button>
+                    <div class="flex items-center gap-1.5 shrink-0">
+                      <button onclick="handleConnectionClick('${item.id}')" class="h-8 px-4 rounded-lg bg-sky-500 text-white text-xs font-semibold whitespace-nowrap">
+                        ${label}
+                      </button>
+                      <button type="button" onclick="openReportAccountModal('${escapeAttr(item.id)}', '${escapeAttr(item.handle)}')" aria-label="Report or block @${escapeAttr(item.handle)}" class="w-8 h-8 rounded-lg flex items-center justify-center text-zinc-400 hover:text-rose-400">
+                        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+                      </button>
+                    </div>
                   </div>
                 `;
               }).join('')}
@@ -3005,12 +3399,17 @@
             ${acceptedFriends.length === 0 ? `
               <p class="p-8 text-center text-xs text-zinc-500">Connect with friends to message them.</p>
             ` : acceptedFriends.map(f => `
-              <button onclick="openChat('${f.id}')" class="w-full px-4 py-3 flex items-center justify-between text-left">
-                <div>
-                  <p class="text-xs font-semibold">${f.display_name}</p>
-                  <p class="text-xs text-zinc-400">@${f.handle}</p>
+              <button onclick="openChat('${f.id}')" class="w-full px-4 py-3 flex items-center justify-between gap-3 text-left">
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="w-11 h-11 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                    ${renderAvatarInner(f, 'text-xs')}
+                  </div>
+                  <div class="min-w-0">
+                    <p class="text-xs font-semibold truncate">${escapeAttr(f.display_name)}</p>
+                    <p class="text-xs text-zinc-400 truncate">@${escapeAttr(f.handle)}</p>
+                  </div>
                 </div>
-                <span class="text-xs text-sky-500 font-semibold">Message</span>
+                <span class="text-xs text-sky-500 font-semibold shrink-0">Message</span>
               </button>
             `).join('')}
           </div>
@@ -3114,6 +3513,22 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
               </svg>
             </button>
+
+            <!-- 0. Appearance (Light / Dark / System) -->
+            <div class="space-y-1.5">
+              <h2 class="px-1 text-xs font-semibold text-zinc-400">Appearance</h2>
+              <div class="p-1.5 rounded-2xl bg-zinc-900/70 border border-zinc-800/80 grid grid-cols-3 gap-1.5">
+                <button type="button" onclick="setColorScheme('light')" class="py-2 rounded-xl text-xs font-semibold transition ${appState.colorSchemePref === 'light' ? 'bg-sky-500 text-white' : 'text-zinc-400 hover:text-white'}">
+                  ☀️ Light
+                </button>
+                <button type="button" onclick="setColorScheme('dark')" class="py-2 rounded-xl text-xs font-semibold transition ${appState.colorSchemePref === 'dark' ? 'bg-sky-500 text-white' : 'text-zinc-400 hover:text-white'}">
+                  🌙 Dark
+                </button>
+                <button type="button" onclick="setColorScheme('system')" class="py-2 rounded-xl text-xs font-semibold transition ${(appState.colorSchemePref || 'system') === 'system' ? 'bg-sky-500 text-white' : 'text-zinc-400 hover:text-white'}">
+                  💻 System
+                </button>
+              </div>
+            </div>
 
             <!-- 1. Privacy & Feed -->
             <div class="space-y-1.5">
@@ -3352,7 +3767,7 @@
                 ${prof.bio ? `<p class="text-xs text-zinc-300 leading-relaxed">${escapeAttr(prof.bio)}</p>` : ''}
               </div>
 
-              <div class="grid ${isConnected ? 'grid-cols-2' : 'grid-cols-1'} gap-2">
+              <div class="grid ${isConnected ? 'grid-cols-3' : 'grid-cols-2'} gap-2">
                 <button onclick="handleConnectionClick('${prof.id}')" class="h-8 rounded-lg ${isConnected ? 'bg-zinc-900 text-white' : 'bg-sky-500 text-white'} text-xs font-semibold">
                   ${connLabel}
                 </button>
@@ -3361,6 +3776,9 @@
                     Message
                   </button>
                 ` : ''}
+                <button onclick="openReportAccountModal('${escapeAttr(prof.id)}', '${escapeAttr(prof.handle)}')" class="h-8 rounded-lg bg-zinc-900 border border-zinc-800 text-rose-400 text-xs font-semibold hover:bg-rose-500/15 transition">
+                  Report account
+                </button>
               </div>
             </div>
 
@@ -3544,15 +3962,19 @@
         const data = await apiFetch('/api/state');
         if (!data.user) return;
         const prevSig = JSON.stringify({
-          f: (appState.feedPosts || []).map(p => p.id + ':' + p.likedByMe),
+          u: (appState.user?.avatar_url || '') + ':' + (appState.user?.display_name || '') + ':' + (appState.user?.bio || ''),
+          ap: (appState.allProfiles || []).map(p => p.id + ':' + (p.avatar_url || '') + ':' + (p.display_name || '')),
+          f: (appState.feedPosts || []).map(p => p.id + ':' + p.likedByMe + ':' + (p.avatar_url || '')),
           m: (appState.myPosts || []).map(p => p.id + ':' + p.ownerOnlyLikesCount),
-          s: (appState.stories || []).map(p => p.id),
+          s: (appState.stories || []).map(p => p.id + ':' + (p.avatar_url || '')),
           c: (appState.connections || []).map(c => c.id + ':' + c.status),
         });
         const nextSig = JSON.stringify({
-          f: (data.feedPosts || []).map(p => p.id + ':' + p.likedByMe),
+          u: (data.user?.avatar_url || '') + ':' + (data.user?.display_name || '') + ':' + (data.user?.bio || ''),
+          ap: (data.allProfiles || []).map(p => p.id + ':' + (p.avatar_url || '') + ':' + (p.display_name || '')),
+          f: (data.feedPosts || []).map(p => p.id + ':' + p.likedByMe + ':' + (p.avatar_url || '')),
           m: (data.myPosts || []).map(p => p.id + ':' + p.ownerOnlyLikesCount),
-          s: (data.stories || []).map(p => p.id),
+          s: (data.stories || []).map(p => p.id + ':' + (p.avatar_url || '')),
           c: (data.connections || []).map(c => c.id + ':' + c.status),
         });
         persistAuthSession(data.token || appState.token, data.user);

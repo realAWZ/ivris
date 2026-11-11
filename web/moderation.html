@@ -3,13 +3,85 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
   <title>Moderation Console | Ivris</title>
+  <!-- Synchronous FOUC-Prevention Color Scheme Loader (per modern-web-guidance: color-scheme-switching) -->
+  <script>
+    (function() {
+      try {
+        var pref = localStorage.getItem('ivris_color_scheme') || 'dark';
+        var resolved = pref;
+        if (pref === 'system') {
+          resolved = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        document.documentElement.dataset.theme = resolved;
+        document.documentElement.dataset.themePref = pref;
+        var meta = document.querySelector('meta[name="color-scheme"]');
+        if (meta) {
+          meta.content = pref === 'system' ? 'light dark' : (resolved === 'light' ? 'light only' : 'dark only');
+        }
+      } catch (_e) {}
+    })();
+  </script>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
+    :root {
+      color-scheme: light dark;
+      --ivris-bg: #000000;
+      --ivris-surface: #09090b;
+      --ivris-surface-alt: #18181b;
+      --ivris-border: #27272a;
+      --ivris-text: #ffffff;
+    }
+    html[data-theme="light"] {
+      color-scheme: light only;
+      --ivris-bg: #ffffff;
+      --ivris-surface: #f8fafc;
+      --ivris-surface-alt: #f1f5f9;
+      --ivris-border: #e2e8f0;
+      --ivris-text: #0f172a;
+    }
+    html[data-theme="dark"] {
+      color-scheme: dark only;
+    }
     body {
-      background-color: #000000;
-      color: #ffffff;
+      background-color: var(--ivris-bg);
+      color: var(--ivris-text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    html[data-theme="light"] body,
+    html[data-theme="light"] .bg-black {
+      background-color: #ffffff !important;
+      color: #0f172a !important;
+    }
+    html[data-theme="light"] .bg-zinc-950 {
+      background-color: #f8fafc !important;
+      color: #0f172a !important;
+    }
+    html[data-theme="light"] .bg-zinc-900,
+    html[data-theme="light"] .bg-zinc-900\/90,
+    html[data-theme="light"] .bg-zinc-900\/60 {
+      background-color: #f1f5f9 !important;
+      color: #0f172a !important;
+    }
+    html[data-theme="light"] .bg-zinc-800 {
+      background-color: #e2e8f0 !important;
+      color: #0f172a !important;
+    }
+    html[data-theme="light"] .border-zinc-900,
+    html[data-theme="light"] .border-zinc-800 {
+      border-color: #e2e8f0 !important;
+    }
+    html[data-theme="light"] .text-white:not(.bg-sky-500):not(.bg-rose-600):not(.bg-rose-600\/90) {
+      color: #0f172a !important;
+    }
+    html[data-theme="light"] .text-zinc-200,
+    html[data-theme="light"] .text-zinc-300 {
+      color: #334155 !important;
+    }
+    html[data-theme="light"] .text-zinc-400,
+    html[data-theme="light"] .text-zinc-500 {
+      color: #64748b !important;
     }
     .mod-btn {
       min-block-size: 36px;
@@ -31,8 +103,8 @@
       max-block-size: min(560px, 78dvh);
       container-type: inline-size;
       border-radius: 1rem;
-      border: 1px solid #27272a;
-      background-color: #09090b;
+      border: 1px solid var(--ivris-border);
+      background-color: var(--ivris-surface);
     }
     .table-wrapper:focus-visible {
       outline: 3px solid #38bdf8;
@@ -49,20 +121,20 @@
       position: sticky;
       inset-block-start: 0;
       z-index: 1;
-      background-color: #18181b;
+      background-color: var(--ivris-surface-alt);
     }
     table.mod-table th,
     table.mod-table td {
       padding: 0.75rem 1rem;
-      border-bottom: 1px solid #27272a;
+      border-bottom: 1px solid var(--ivris-border);
       vertical-align: middle;
     }
     table.mod-table tbody th {
       position: sticky;
       inset-inline-start: 0;
-      background: #09090b;
+      background: var(--ivris-surface);
       font-weight: 600;
-      color: #ffffff;
+      color: var(--ivris-text);
     }
     @container (width < 600px) {
       table.mod-table,
@@ -78,7 +150,7 @@
       }
       table.mod-table tr {
         margin-block-end: 1rem;
-        border: 1px solid #27272a;
+        border: 1px solid var(--ivris-border);
         border-radius: 0.75rem;
         overflow: hidden;
       }
@@ -86,7 +158,7 @@
         position: sticky;
         inset-block-start: 0;
         z-index: 2;
-        background: #18181b;
+        background: var(--ivris-surface-alt);
       }
       table.mod-table td:nth-child(2)::before {
         content: var(--label-2) ": ";
@@ -120,12 +192,25 @@
       moderator: null,
       activeTab: 'reports',
       reports: [],
+      accountReports: [],
       activePosts: [],
       logs: [],
       users: [],
+      userSearch: '',
       error: '',
       statusBanner: '',
     };
+
+    function toggleModTheme() {
+      const current = document.documentElement.dataset.theme || 'dark';
+      const next = current === 'light' ? 'dark' : 'light';
+      document.documentElement.dataset.theme = next;
+      document.documentElement.dataset.themePref = next;
+      try { localStorage.setItem('ivris_color_scheme', next); } catch (_e) {}
+      const meta = document.querySelector('meta[name="color-scheme"]');
+      if (meta) meta.content = next === 'light' ? 'light only' : 'dark only';
+      renderMod();
+    }
 
     function escapeHtml(str) {
       return String(str || '')
@@ -133,6 +218,16 @@
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+    }
+
+    function renderAvatarCell(u) {
+      const handle = (u && (u.handle || u.author_handle)) || 'U';
+      const initials = escapeHtml(handle.slice(0, 2).toUpperCase());
+      const avatarUrl = (u && (u.avatar_url || u.author_avatar_url)) || '';
+      if (avatarUrl) {
+        return `<div class="w-10 h-10 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0"><img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(handle)}" class="w-full h-full object-cover" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><span style="display:none" class="w-full h-full items-center justify-center font-bold text-xs">${initials}</span></div>`;
+      }
+      return `<div class="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-xs shrink-0">${initials}</div>`;
     }
 
     function formatTime(ts) {
@@ -166,6 +261,7 @@
       }
       modState.moderator = res.data.moderator;
       modState.reports = res.data.reports || [];
+      modState.accountReports = res.data.account_reports || [];
       modState.activePosts = res.data.active_posts || [];
       modState.logs = res.data.logs || [];
       modState.users = res.data.users || [];
@@ -224,6 +320,24 @@
       await loadDashboard();
     }
 
+    async function handleClearUserProfile(userId, handle, clearAvatar, clearBio) {
+      const res = await modFetch('/api/moderation/clear-profile', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: userId,
+          clear_avatar: Boolean(clearAvatar),
+          clear_bio: Boolean(clearBio),
+          reason: `Profile photo/bio cleared by moderator for @${handle}`,
+        }),
+      });
+      if (res.ok) {
+        modState.statusBanner = `Cleared profile photo/bio for @${handle}.`;
+      } else {
+        modState.statusBanner = res.data.error || 'Failed to clear profile.';
+      }
+      await loadDashboard();
+    }
+
     async function handleSyncUpstream() {
       const btn = document.getElementById('mod-sync-btn');
       if (btn) btn.textContent = 'Syncing with cloud...';
@@ -274,13 +388,19 @@
 
     function renderMod() {
       const root = document.getElementById('mod-root');
+      const isLight = (document.documentElement.dataset.theme || 'dark') === 'light';
 
       if (!modState.moderator) {
         root.innerHTML = `
-          <main class="max-w-sm mx-auto my-16 p-6 rounded-2xl bg-zinc-900/90 border border-zinc-800 space-y-5">
+          <div class="flex justify-end mb-4">
+            <button onclick="toggleModTheme()" class="mod-btn px-3.5 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-semibold">
+              ${isLight ? '🌙 Dark mode' : '☀️ Light mode'}
+            </button>
+          </div>
+          <main class="max-w-sm mx-auto my-12 p-6 rounded-2xl bg-zinc-900/90 border border-zinc-800 space-y-5">
             <div class="space-y-1 text-center">
               <h1 class="text-2xl font-bold tracking-tight" style="font-family: Georgia, serif;">Ivris Moderation</h1>
-              <p class="text-xs text-zinc-400">Sign in with your moderator account to review reports and enforce safety rules.</p>
+              <p class="text-xs text-zinc-400">Sign in with your moderator account to review reports and enforce teen &amp; adult safety rules.</p>
             </div>
 
             ${modState.error ? `
@@ -307,7 +427,8 @@
         return;
       }
 
-      const openReportsCount = modState.reports.filter(r => r.status === 'open').length;
+      const openPostReportsCount = modState.reports.filter(r => r.status === 'open').length;
+      const openAccountReportsCount = modState.accountReports.filter(r => r.status === 'open').length;
       const autoNudityCount = modState.logs.filter(l => l.action === 'auto_deleted_nudity').length;
 
       let tabContent = '';
@@ -317,7 +438,7 @@
           <div tabindex="0" role="region" aria-labelledby="reports-table-caption" class="table-wrapper">
             <table class="mod-table" style="--label-2: 'Author'; --label-3: 'Reason & Caption'; --label-4: 'Status'; --label-5: 'Action';">
               <caption id="reports-table-caption" class="px-4 py-3 text-left text-xs font-semibold text-zinc-300 border-b border-zinc-800 bg-zinc-900/60">
-                Reported Content Queue (${openReportsCount} open)
+                Reported Posts Queue (${openPostReportsCount} open)
               </caption>
               <thead>
                 <tr>
@@ -331,7 +452,7 @@
               <tbody>
                 ${modState.reports.length === 0 ? `
                   <tr>
-                    <th scope="row" colspan="5" class="text-center text-zinc-500 py-8">No reported items in the queue.</th>
+                    <th scope="row" colspan="5" class="text-center text-zinc-500 py-8">No reported posts in the queue.</th>
                   </tr>
                 ` : modState.reports.map(r => `
                   <tr>
@@ -360,6 +481,71 @@
                           <button onclick="handleTakeDownPost('${escapeHtml(r.post_id)}', 'Taken down from report: ${escapeHtml(r.reason)}')" class="mod-btn px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold">
                             Take Down Immediately
                           </button>
+                          <button onclick="handleDismissReport('${escapeHtml(r.id)}')" class="mod-btn px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-200 text-xs font-semibold">
+                            Dismiss
+                          </button>
+                        </div>
+                      ` : `<span class="text-zinc-500">Resolved</span>`}
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      } else if (modState.activeTab === 'account_reports') {
+        tabContent = `
+          <div tabindex="0" role="region" aria-labelledby="account-reports-caption" class="table-wrapper">
+            <table class="mod-table" style="--label-2: 'Reported By'; --label-3: 'Reason & Bio'; --label-4: 'Status'; --label-5: 'Action';">
+              <caption id="account-reports-caption" class="px-4 py-3 text-left text-xs font-semibold text-zinc-300 border-b border-zinc-800 bg-zinc-900/60">
+                Reported Accounts Queue (${openAccountReportsCount} open)
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Account</th>
+                  <th scope="col">Reported By</th>
+                  <th scope="col">Reason &amp; Bio</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${modState.accountReports.length === 0 ? `
+                  <tr>
+                    <th scope="row" colspan="5" class="text-center text-zinc-500 py-8">No reported accounts in the queue.</th>
+                  </tr>
+                ` : modState.accountReports.map(r => `
+                  <tr>
+                    <th scope="row">
+                      <div class="flex items-center gap-3">
+                        ${renderAvatarCell({ handle: r.author_handle, avatar_url: r.author_avatar_url })}
+                        <div>
+                          <div class="font-semibold">@${escapeHtml(r.author_handle || 'deleted')}</div>
+                          <div class="text-xs text-zinc-400">${escapeHtml(r.author_display_name || '')}</div>
+                        </div>
+                      </div>
+                    </th>
+                    <td>@${escapeHtml(r.reporter_handle || 'anonymous')}</td>
+                    <td>
+                      <div class="font-semibold text-rose-400">${escapeHtml(r.reason)}</div>
+                      <div class="text-zinc-400 truncate max-w-xs">${escapeHtml(r.author_bio || r.details || '—')}</div>
+                    </td>
+                    <td>
+                      <span class="px-2 py-0.5 rounded-full text-xs font-semibold ${r.status === 'open' ? 'bg-amber-500/20 text-amber-300' : 'bg-zinc-800 text-zinc-400'}">
+                        ${escapeHtml(r.status)}
+                      </span>
+                    </td>
+                    <td>
+                      ${r.status === 'open' ? `
+                        <div class="flex flex-wrap gap-2">
+                          ${r.target_user_id ? `
+                            <button onclick="handleClearUserProfile('${escapeHtml(r.target_user_id)}', '${escapeHtml(r.author_handle)}', true, true)" class="mod-btn px-3 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-semibold">
+                              Clear Photo/Bio
+                            </button>
+                            <button onclick="if(confirm('Remove @${escapeHtml(r.author_handle)}?'))handleDeleteUser('${escapeHtml(r.target_user_id)}', '${escapeHtml(r.author_handle)}')" class="mod-btn px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold">
+                              Remove Account
+                            </button>
+                          ` : ''}
                           <button onclick="handleDismissReport('${escapeHtml(r.id)}')" class="mod-btn px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-200 text-xs font-semibold">
                             Dismiss
                           </button>
@@ -454,44 +640,70 @@
           </div>
         `;
       } else if (modState.activeTab === 'users') {
+        const q = (modState.userSearch || '').toLowerCase();
+        const filteredUsers = modState.users.filter(u =>
+          !q ||
+          (u.handle || '').toLowerCase().includes(q) ||
+          (u.display_name || '').toLowerCase().includes(q) ||
+          (u.email || '').toLowerCase().includes(q)
+        );
         tabContent = `
+          <div class="mb-3">
+            <input type="text" value="${escapeHtml(modState.userSearch)}" oninput="modState.userSearch=this.value;renderMod()" placeholder="Search accounts by username, name, or email..." class="w-full max-w-md px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none" />
+          </div>
           <div tabindex="0" role="region" aria-labelledby="users-table-caption" class="table-wrapper">
-            <table class="mod-table" style="--label-2: 'Name'; --label-3: 'Email'; --label-4: 'Type'; --label-5: 'Action';">
+            <table class="mod-table" style="--label-2: 'Name & Bio'; --label-3: 'Email'; --label-4: 'Stats'; --label-5: 'Action';">
               <caption id="users-table-caption" class="px-4 py-3 text-left text-xs font-semibold text-zinc-300 border-b border-zinc-800 bg-zinc-900/60">
-                Registered Accounts (${modState.users.length})
+                Registered Accounts (${filteredUsers.length})
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">Username</th>
-                  <th scope="col">Display Name</th>
+                  <th scope="col">Account</th>
+                  <th scope="col">Name &amp; Bio</th>
                   <th scope="col">Email</th>
-                  <th scope="col">Account Type</th>
+                  <th scope="col">Stats</th>
                   <th scope="col">Action</th>
                 </tr>
               </thead>
               <tbody>
-                ${modState.users.length === 0 ? `
+                ${filteredUsers.length === 0 ? `
                   <tr>
                     <th scope="row" colspan="5" class="text-center text-zinc-500 py-8">No user accounts found.</th>
                   </tr>
-                ` : modState.users.map(u => `
+                ` : filteredUsers.map(u => `
                   <tr>
                     <th scope="row">
-                      <div class="flex items-center gap-2">
-                        <span>@${escapeHtml(u.handle)}</span>
-                        ${u.email_confirmed
-                          ? '<span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold">Verified</span>'
-                          : '<span class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-semibold">Pending Verification</span>'}
-                        ${u.is_verified_institution ? '<span class="px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 text-[10px] font-semibold">Institution</span>' : ''}
+                      <div class="flex items-center gap-3">
+                        ${renderAvatarCell(u)}
+                        <div class="space-y-1">
+                          <div class="flex items-center gap-1.5 flex-wrap">
+                            <span>@${escapeHtml(u.handle)}</span>
+                            ${u.email_confirmed
+                              ? '<span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold">Verified</span>'
+                              : '<span class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-semibold">Pending</span>'}
+                            ${u.is_verified_institution ? '<span class="px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 text-[10px] font-semibold">Institution</span>' : ''}
+                            ${u.open_reports_count > 0 ? `<span class="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-400 text-[10px] font-semibold">${u.open_reports_count} Report(s)</span>` : ''}
+                          </div>
+                        </div>
                       </div>
                     </th>
-                    <td>${escapeHtml(u.display_name)}</td>
-                    <td class="text-zinc-400">${escapeHtml(u.email)}</td>
-                    <td class="text-zinc-400">${escapeHtml(u.account_type)}</td>
                     <td>
-                      <button onclick="handleDeleteUser('${escapeHtml(u.id)}', '${escapeHtml(u.handle)}')" class="mod-btn px-3 py-1.5 rounded-lg bg-rose-600/90 text-white text-xs font-semibold">
-                        Remove Account
-                      </button>
+                      <div class="font-semibold">${escapeHtml(u.display_name)}</div>
+                      ${u.bio ? `<div class="text-zinc-400 text-[11px] max-w-xs truncate">${escapeHtml(u.bio)}</div>` : ''}
+                    </td>
+                    <td class="text-zinc-400">${escapeHtml(u.email)}</td>
+                    <td class="text-zinc-400">${u.posts_count || 0} posts · ${u.friends_count || 0} friends</td>
+                    <td>
+                      <div class="flex flex-wrap gap-1.5">
+                        ${(u.avatar_url || u.bio) ? `
+                          <button onclick="handleClearUserProfile('${escapeHtml(u.id)}', '${escapeHtml(u.handle)}', true, true)" class="mod-btn px-2.5 py-1.5 rounded-lg bg-zinc-800 text-zinc-200 text-xs font-semibold">
+                            Clear Photo/Bio
+                          </button>
+                        ` : ''}
+                        <button onclick="if(confirm('Remove @${escapeHtml(u.handle)} and all their posts?'))handleDeleteUser('${escapeHtml(u.id)}', '${escapeHtml(u.handle)}')" class="mod-btn px-3 py-1.5 rounded-lg bg-rose-600/90 text-white text-xs font-semibold">
+                          Remove Account
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 `).join('')}
@@ -505,9 +717,12 @@
         <header class="pb-5 border-b border-zinc-900 flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 class="text-2xl font-bold tracking-tight" style="font-family: Georgia, serif;">Ivris Moderation Console</h1>
-            <p class="text-xs text-zinc-400">Signed in as <span class="text-white font-semibold">@${escapeHtml(modState.moderator.handle)}</span> · Automatic Nudity Deletion Active</p>
+            <p class="text-xs text-zinc-400">Signed in as <span class="text-white font-semibold">@${escapeHtml(modState.moderator.handle)}</span> · Teen &amp; Adult Safety Active</p>
           </div>
-          <div class="flex items-center gap-2.5">
+          <div class="flex flex-wrap items-center gap-2">
+            <button onclick="toggleModTheme()" class="mod-btn px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-semibold">
+              ${isLight ? '🌙 Dark' : '☀️ Light'}
+            </button>
             <button id="mod-sync-btn" onclick="handleSyncUpstream()" class="mod-btn px-3.5 py-2 rounded-xl bg-sky-500/20 border border-sky-500/40 text-sky-300 text-xs font-semibold flex items-center gap-1.5" title="Synchronize accounts and posts with production cloud server">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
               <span>Sync Cloud Database</span>
@@ -534,17 +749,20 @@
           ` : ''}
 
           <nav aria-label="Moderation Views" class="flex flex-wrap gap-2">
-            <button onclick="setModTab('reports')" class="mod-btn px-4 py-2 rounded-full text-xs font-semibold ${modState.activeTab === 'reports' ? 'bg-white text-black' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">
-              Reported Queue (${openReportsCount})
+            <button onclick="setModTab('reports')" class="mod-btn px-4 py-2 rounded-full text-xs font-semibold ${modState.activeTab === 'reports' ? 'bg-sky-500 text-white' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">
+              Post Reports (${openPostReportsCount})
             </button>
-            <button onclick="setModTab('posts')" class="mod-btn px-4 py-2 rounded-full text-xs font-semibold ${modState.activeTab === 'posts' ? 'bg-white text-black' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">
+            <button onclick="setModTab('account_reports')" class="mod-btn px-4 py-2 rounded-full text-xs font-semibold ${modState.activeTab === 'account_reports' ? 'bg-sky-500 text-white' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">
+              Account Reports (${openAccountReportsCount})
+            </button>
+            <button onclick="setModTab('users')" class="mod-btn px-4 py-2 rounded-full text-xs font-semibold ${modState.activeTab === 'users' ? 'bg-sky-500 text-white' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">
+              Accounts (${modState.users.length})
+            </button>
+            <button onclick="setModTab('posts')" class="mod-btn px-4 py-2 rounded-full text-xs font-semibold ${modState.activeTab === 'posts' ? 'bg-sky-500 text-white' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">
               All Active Posts (${modState.activePosts.length})
             </button>
-            <button onclick="setModTab('logs')" class="mod-btn px-4 py-2 rounded-full text-xs font-semibold ${modState.activeTab === 'logs' ? 'bg-white text-black' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">
-              Nudity &amp; Takedown Log (${autoNudityCount} auto-deleted)
-            </button>
-            <button onclick="setModTab('users')" class="mod-btn px-4 py-2 rounded-full text-xs font-semibold ${modState.activeTab === 'users' ? 'bg-white text-black' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">
-              Accounts (${modState.users.length})
+            <button onclick="setModTab('logs')" class="mod-btn px-4 py-2 rounded-full text-xs font-semibold ${modState.activeTab === 'logs' ? 'bg-sky-500 text-white' : 'bg-zinc-900 text-zinc-300 border border-zinc-800'}">
+              Audit Log (${autoNudityCount} auto-deleted)
             </button>
           </nav>
 

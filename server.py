@@ -199,6 +199,7 @@ def init_db():
             email_confirmed INTEGER NOT NULL DEFAULT 0,
             verification_code TEXT DEFAULT '',
             settings_json TEXT DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL
         );
 
@@ -272,7 +273,9 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS moderation_reports (
             id TEXT PRIMARY KEY,
-            post_id TEXT NOT NULL,
+            report_type TEXT NOT NULL DEFAULT 'post',
+            post_id TEXT DEFAULT '',
+            target_user_id TEXT DEFAULT '',
             reporter_id TEXT,
             reason TEXT NOT NULL,
             details TEXT DEFAULT '',
@@ -315,6 +318,16 @@ def init_db():
         cur.execute("ALTER TABLE users ADD COLUMN settings_json TEXT DEFAULT '{}'")
     if "avatar_url" not in existing_user_cols:
         cur.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''")
+    if "updated_at" not in existing_user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0")
+
+    existing_report_cols = [
+        r["name"] for r in cur.execute("PRAGMA table_info(moderation_reports)").fetchall()
+    ]
+    if "report_type" not in existing_report_cols:
+        cur.execute("ALTER TABLE moderation_reports ADD COLUMN report_type TEXT NOT NULL DEFAULT 'post'")
+    if "target_user_id" not in existing_report_cols:
+        cur.execute("ALTER TABLE moderation_reports ADD COLUMN target_user_id TEXT DEFAULT ''")
 
     existing_post_cols = [
         r["name"] for r in cur.execute("PRAGMA table_info(posts)").fetchall()
@@ -592,6 +605,11 @@ def merge_databases(src_path: Path, dst_path: Path = DB_PATH) -> dict:
             src_user_cols = {
                 r["name"] for r in src_conn.execute("PRAGMA table_info(users)").fetchall()
             }
+
+            def _avatar_ts(url_str: str) -> int:
+                m = re.search(r"avatar_[^_]+_(\d+)\.", url_str or "")
+                return int(m.group(1)) if m else 0
+
             for u in src_conn.execute("SELECT * FROM users").fetchall():
                 u_dict = dict(u)
                 uid = u_dict["id"]
@@ -612,8 +630,8 @@ def merge_databases(src_path: Path, dst_path: Path = DB_PATH) -> dict:
                     conn.execute(
                         """
                         INSERT OR IGNORE INTO users
-                        (id, email, password_hash, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (id, email, password_hash, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, updated_at, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             uid,
@@ -628,6 +646,7 @@ def merge_databases(src_path: Path, dst_path: Path = DB_PATH) -> dict:
                             int(u_dict.get("email_confirmed", 1)),
                             u_dict.get("verification_code") or "",
                             settings_raw,
+                            int(u_dict.get("updated_at") or 0) if "updated_at" in src_user_cols else 0,
                             int(u_dict.get("created_at") or time.time()),
                         ),
                     )
@@ -641,15 +660,34 @@ def merge_databases(src_path: Path, dst_path: Path = DB_PATH) -> dict:
                         int(ex_dict.get("is_verified_institution") or 0),
                         int(u_dict.get("is_verified_institution") or 0),
                     )
-                    avatar = ex_dict.get("avatar_url") or u_dict.get("avatar_url") or ""
-                    bio = ex_dict.get("bio") or u_dict.get("bio") or ""
+                    ex_upd = int(ex_dict.get("updated_at") or 0)
+                    src_upd = int(u_dict.get("updated_at") or 0) if "updated_at" in src_user_cols else 0
+                    ex_av = ex_dict.get("avatar_url") or ""
+                    src_av = u_dict.get("avatar_url") or "" if "avatar_url" in src_user_cols else ""
+
+                    if src_upd > ex_upd:
+                        avatar = src_av
+                        bio = u_dict.get("bio") or ""
+                        disp_name = u_dict.get("display_name") or ex_dict.get("display_name")
+                        upd_ts = src_upd
+                    elif ex_upd > src_upd:
+                        avatar = ex_av
+                        bio = ex_dict.get("bio") or ""
+                        disp_name = ex_dict.get("display_name")
+                        upd_ts = ex_upd
+                    else:
+                        avatar = src_av if _avatar_ts(src_av) > _avatar_ts(ex_av) else (ex_av or src_av)
+                        bio = ex_dict.get("bio") or u_dict.get("bio") or ""
+                        disp_name = ex_dict.get("display_name") or u_dict.get("display_name")
+                        upd_ts = max(ex_upd, src_upd)
+
                     conn.execute(
                         """
                         UPDATE users
-                        SET email_confirmed = ?, is_verified_institution = ?, avatar_url = ?, bio = ?
+                        SET email_confirmed = ?, is_verified_institution = ?, display_name = ?, avatar_url = ?, bio = ?, updated_at = ?
                         WHERE id = ?
                         """,
-                        (confirmed, verified_inst, avatar, bio, ex_dict["id"]),
+                        (confirmed, verified_inst, disp_name, avatar, bio, upd_ts, ex_dict["id"]),
                     )
 
         # 3. Merge connections additively (promoting pending -> accepted if accepted on either side)
@@ -774,23 +812,34 @@ def merge_databases(src_path: Path, dst_path: Path = DB_PATH) -> dict:
                     ),
                 )
         if "moderation_reports" in src_tables:
+            src_rep_cols = {
+                r["name"] for r in src_conn.execute("PRAGMA table_info(moderation_reports)").fetchall()
+            }
             for mr in src_conn.execute("SELECT * FROM moderation_reports").fetchall():
+                mr_d = dict(mr)
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO moderation_reports
-                    (id, post_id, reporter_id, reason, details, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (id, report_type, post_id, target_user_id, reporter_id, reason, details, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        mr["id"],
-                        mr["post_id"],
-                        mr["reporter_id"],
-                        mr["reason"],
-                        mr["details"],
-                        mr["status"],
-                        mr["created_at"],
+                        mr_d["id"],
+                        mr_d.get("report_type") or ("account" if mr_d.get("target_user_id") else "post") if "report_type" in src_rep_cols else "post",
+                        mr_d.get("post_id") or "",
+                        mr_d.get("target_user_id") or "" if "target_user_id" in src_rep_cols else "",
+                        mr_d.get("reporter_id"),
+                        mr_d["reason"],
+                        mr_d.get("details") or "",
+                        mr_d["status"],
+                        mr_d["created_at"],
                     ),
                 )
+                if mr_d["status"] != "open":
+                    conn.execute(
+                        "UPDATE moderation_reports SET status = ? WHERE id = ? AND status = 'open'",
+                        (mr_d["status"], mr_d["id"]),
+                    )
         if "moderation_logs" in src_tables:
             for ml in src_conn.execute("SELECT * FROM moderation_logs").fetchall():
                 conn.execute(
@@ -998,7 +1047,17 @@ def trigger_background_vault_sync():
 def get_db_state_signature(db_file: Path) -> tuple:
     try:
         c = sqlite3.connect(db_file, timeout=10.0)
-        u = sorted([r[0] for r in c.execute("SELECT id FROM users").fetchall()])
+        u_cols = {r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()}
+        if "updated_at" in u_cols:
+            u = sorted([
+                f"{r[0]}:{r[1]}:{r[2] or ''}:{r[3] or ''}:{r[4] or ''}:{r[5] or 0}"
+                for r in c.execute("SELECT id, email_confirmed, handle, display_name, avatar_url, updated_at FROM users").fetchall()
+            ])
+        else:
+            u = sorted([
+                f"{r[0]}:{r[1]}:{r[2] or ''}:{r[3] or ''}:{r[4] or ''}"
+                for r in c.execute("SELECT id, email_confirmed, handle, display_name, avatar_url FROM users").fetchall()
+            ])
         p = sorted([r[0] for r in c.execute("SELECT id FROM posts").fetchall()])
         cn = sorted(
             [f"{r[0]}:{r[1]}" for r in c.execute("SELECT id, status FROM connections").fetchall()]
@@ -1006,9 +1065,12 @@ def get_db_state_signature(db_file: Path) -> tuple:
         b = sorted(
             [f"{r[0]}:{len(r[1])}" for r in c.execute("SELECT url, data FROM media_blobs").fetchall()]
         )
+        rep = sorted(
+            [f"{r[0]}:{r[1]}" for r in c.execute("SELECT id, status FROM moderation_reports").fetchall()]
+        )
         dm = c.execute("SELECT COUNT(*) FROM direct_messages").fetchone()[0]
         c.close()
-        return (tuple(u), tuple(p), tuple(cn), tuple(b), dm)
+        return (tuple(u), tuple(p), tuple(cn), tuple(b), tuple(rep), dm)
     except Exception:
         return ()
 
@@ -1287,17 +1349,19 @@ def sweep_and_delete_nudity(conn) -> int:
 
 
 def build_moderation_dashboard_payload(conn, user) -> dict:
-    reports = [
+    all_reports = [
         dict(r)
         for r in conn.execute(
             """
             SELECT r.*,
                    p.media_url, p.media_urls_json, p.media_kind, p.caption, p.created_at AS post_created_at,
-                   u.handle AS author_handle, u.display_name AS author_name, u.id AS author_id,
+                   u.handle AS author_handle, u.display_name AS author_name, u.id AS author_id, u.avatar_url AS author_avatar_url,
+                   tu.handle AS target_user_handle, tu.display_name AS target_user_name, tu.avatar_url AS target_user_avatar, tu.bio AS target_user_bio, tu.email AS target_user_email,
                    rep.handle AS reporter_handle
             FROM moderation_reports r
-            LEFT JOIN posts p ON p.id = r.post_id
+            LEFT JOIN posts p ON p.id = r.post_id AND r.post_id != ''
             LEFT JOIN users u ON u.id = p.author_id
+            LEFT JOIN users tu ON tu.id = r.target_user_id AND r.target_user_id != ''
             LEFT JOIN users rep ON rep.id = r.reporter_id
             ORDER BY
               CASE WHEN r.status = 'open' THEN 0 ELSE 1 END ASC,
@@ -1305,6 +1369,17 @@ def build_moderation_dashboard_payload(conn, user) -> dict:
             """
         ).fetchall()
     ]
+
+    for r in all_reports:
+        rtype = r.get("report_type") or ("account" if r.get("target_user_id") else "post")
+        r["report_type"] = rtype
+        if rtype == "account" and not r.get("author_handle"):
+            r["author_handle"] = r.get("target_user_handle") or ""
+            r["author_name"] = r.get("target_user_name") or ""
+            r["author_id"] = r.get("target_user_id") or ""
+
+    reports = [r for r in all_reports if r.get("report_type") != "account"]
+    account_reports = [r for r in all_reports if r.get("report_type") == "account"]
 
     active_posts = []
     for r in conn.execute(
@@ -1336,17 +1411,29 @@ def build_moderation_dashboard_payload(conn, user) -> dict:
         ).fetchall()
     ]
 
-    users_list = [
-        dict(r)
-        for r in conn.execute(
-            """
-            SELECT id, email, handle, display_name, avatar_url, account_type, is_verified_institution, email_confirmed, created_at
-            FROM users
-            WHERE account_type != 'moderator'
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
-    ]
+    users_list = []
+    for r in conn.execute(
+        """
+        SELECT id, email, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, updated_at, created_at
+        FROM users
+        WHERE account_type != 'moderator'
+        ORDER BY created_at DESC
+        """
+    ).fetchall():
+        ud = dict(r)
+        uid_val = ud["id"]
+        ud["posts_count"] = conn.execute(
+            "SELECT COUNT(*) AS c FROM posts WHERE author_id = ?", (uid_val,)
+        ).fetchone()["c"]
+        ud["friends_count"] = conn.execute(
+            "SELECT COUNT(*) AS c FROM connections WHERE status = 'accepted' AND (requester_id = ? OR addressee_id = ?)",
+            (uid_val, uid_val),
+        ).fetchone()["c"]
+        ud["open_reports_count"] = conn.execute(
+            "SELECT COUNT(*) AS c FROM moderation_reports WHERE target_user_id = ? AND status = 'open'",
+            (uid_val,),
+        ).fetchone()["c"]
+        users_list.append(ud)
 
     inst_apps = [
         dict(r)
@@ -1366,6 +1453,8 @@ def build_moderation_dashboard_payload(conn, user) -> dict:
         },
         "auto_deleted_in_sweep": 0,
         "reports": reports,
+        "account_reports": account_reports,
+        "all_reports": all_reports,
         "active_posts": active_posts,
         "logs": logs,
         "users": users_list,
@@ -2026,14 +2115,110 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 conn.commit()
                 return self.send_json({"ok": True})
 
-            # Public or authenticated content report endpoint
+            # Public or authenticated content & account report endpoint
             if parsed.path == "/api/report":
                 user = self.get_current_user(conn)
                 post_id = (body.get("post_id") or "").strip()
+                target_user_id = (body.get("target_user_id") or "").strip()
+                report_type = (body.get("report_type") or ("account" if target_user_id and not post_id else "post")).strip()
                 reason = (body.get("reason") or "reported_content").strip()
                 details = (body.get("details") or "").strip()
+                block_user = bool(body.get("block_user", False))
+                now_ts = int(time.time())
+
+                if report_type == "account" or (target_user_id and not post_id):
+                    if not target_user_id:
+                        return self.send_json({"error": "target_user_id is required to report an account."}, 400)
+                    target_row = conn.execute(
+                        "SELECT * FROM users WHERE id = ?", (target_user_id,)
+                    ).fetchone()
+                    if not target_row:
+                        return self.send_json({"error": "Account not found or already removed."}, 404)
+                    target_u = dict(target_row)
+
+                    # Optional block / disconnect on report
+                    if block_user and user:
+                        existing_conns = conn.execute(
+                            """
+                            SELECT id FROM connections
+                            WHERE (requester_id = ? AND addressee_id = ?)
+                               OR (requester_id = ? AND addressee_id = ?)
+                            """,
+                            (user["id"], target_user_id, target_user_id, user["id"]),
+                        ).fetchall()
+                        for ec in existing_conns:
+                            conn.execute("DELETE FROM connections WHERE id = ?", (ec["id"],))
+                            conn.execute(
+                                "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES ('connection', ?, ?)",
+                                (ec["id"], now_ts),
+                            )
+
+                    immediately_cleared_avatar = False
+                    if "nudi" in reason.lower() or "explicit" in reason.lower() or "inappropriate profile photo" in reason.lower():
+                        old_av = target_u.get("avatar_url") or ""
+                        if old_av.startswith("/uploads/"):
+                            fname = old_av.replace("/uploads/", "", 1)
+                            fpath = (UPLOADS_DIR / fname).resolve()
+                            if str(fpath).startswith(str(UPLOADS_DIR.resolve())) and fpath.exists():
+                                try:
+                                    fpath.unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                            conn.execute("DELETE FROM media_blobs WHERE url = ?", (old_av,))
+                        conn.execute(
+                            "UPDATE users SET avatar_url = '', updated_at = ? WHERE id = ?",
+                            (now_ts, target_user_id),
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO moderation_logs (id, moderator_id, action, target_id, author_handle, reason, created_at)
+                            VALUES (?, ?, 'auto_cleared_avatar', ?, ?, ?, ?)
+                            """,
+                            (
+                                "log_" + secrets.token_hex(6),
+                                user["id"] if user else "system_auto_nudity_filter",
+                                target_user_id,
+                                target_u.get("handle") or "",
+                                f"Profile picture automatically removed from safety report: {reason}",
+                                now_ts,
+                            ),
+                        )
+                        immediately_cleared_avatar = True
+
+                    report_id = "rep_" + secrets.token_hex(6)
+                    conn.execute(
+                        """
+                        INSERT INTO moderation_reports
+                        (id, report_type, post_id, target_user_id, reporter_id, reason, details, status, created_at)
+                        VALUES (?, 'account', '', ?, ?, ?, ?, 'open', ?)
+                        """,
+                        (
+                            report_id,
+                            target_user_id,
+                            user["id"] if user else None,
+                            reason,
+                            details or f"Account @{target_u.get('handle')} reported",
+                            now_ts,
+                        ),
+                    )
+                    conn.commit()
+                    create_database_backup("account_reported")
+                    return self.send_json(
+                        {
+                            "ok": True,
+                            "report_id": report_id,
+                            "report_type": "account",
+                            "immediately_cleared_avatar": immediately_cleared_avatar,
+                            "disconnected": block_user,
+                            "message": (
+                                f"Safety report submitted for @{target_u.get('handle')}. "
+                                + ("Offending profile photo was immediately removed." if immediately_cleared_avatar else "Ivris Trust & Safety will review this account.")
+                            ),
+                        }
+                    )
+
                 if not post_id:
-                    return self.send_json({"error": "post_id is required."}, 400)
+                    return self.send_json({"error": "post_id or target_user_id is required."}, 400)
 
                 post_row = conn.execute(
                     "SELECT * FROM posts WHERE id = ?", (post_id,)
@@ -2062,20 +2247,22 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 report_id = "rep_" + secrets.token_hex(6)
                 conn.execute(
                     """
-                    INSERT INTO moderation_reports (id, post_id, reporter_id, reason, details, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, 'open', ?)
+                    INSERT INTO moderation_reports (id, report_type, post_id, target_user_id, reporter_id, reason, details, status, created_at)
+                    VALUES (?, 'post', ?, ?, ?, ?, ?, 'open', ?)
                     """,
                     (
                         report_id,
                         post_id,
+                        post_row["author_id"] or "",
                         user["id"] if user else None,
                         reason,
                         details,
-                        int(time.time()),
+                        now_ts,
                     ),
                 )
                 conn.commit()
-                return self.send_json({"ok": True, "report_id": report_id})
+                create_database_backup("post_reported")
+                return self.send_json({"ok": True, "report_id": report_id, "report_type": "post"})
 
             # Authenticated endpoints below
             user = self.get_current_user(conn)
@@ -2169,6 +2356,60 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     conn.commit()
                     return self.send_json({"ok": True})
 
+                if parsed.path == "/api/moderation/clear-profile":
+                    target_uid = (body.get("user_id") or "").strip()
+                    clear_avatar = bool(body.get("clear_avatar", True))
+                    clear_bio = bool(body.get("clear_bio", False))
+                    reason = (body.get("reason") or "Profile photo/bio cleared by moderator").strip()
+                    target_user = conn.execute(
+                        "SELECT * FROM users WHERE id = ? AND account_type != 'moderator'",
+                        (target_uid,),
+                    ).fetchone()
+                    if not target_user:
+                        return self.send_json({"error": "User not found."}, 404)
+                    tu = dict(target_user)
+                    now_mod_ts = int(time.time())
+                    new_av = tu.get("avatar_url") or ""
+                    new_bio = tu.get("bio") or ""
+                    if clear_avatar:
+                        if new_av.startswith("/uploads/"):
+                            fname = new_av.replace("/uploads/", "", 1)
+                            fpath = (UPLOADS_DIR / fname).resolve()
+                            if str(fpath).startswith(str(UPLOADS_DIR.resolve())) and fpath.exists():
+                                try:
+                                    fpath.unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                            conn.execute("DELETE FROM media_blobs WHERE url = ?", (new_av,))
+                        new_av = ""
+                    if clear_bio:
+                        new_bio = ""
+                    conn.execute(
+                        "UPDATE users SET avatar_url = ?, bio = ?, updated_at = ? WHERE id = ?",
+                        (new_av, new_bio, now_mod_ts, target_uid),
+                    )
+                    conn.execute(
+                        "UPDATE moderation_reports SET status = 'resolved' WHERE target_user_id = ? AND status = 'open'",
+                        (target_uid,),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO moderation_logs (id, moderator_id, action, target_id, author_handle, reason, created_at)
+                        VALUES (?, ?, 'clear_profile_content', ?, ?, ?, ?)
+                        """,
+                        (
+                            "log_" + secrets.token_hex(6),
+                            uid,
+                            target_uid,
+                            tu["handle"],
+                            reason,
+                            now_mod_ts,
+                        ),
+                    )
+                    conn.commit()
+                    create_database_backup("profile_cleared_by_mod")
+                    return self.send_json({"ok": True})
+
                 if parsed.path == "/api/moderation/delete-user":
                     target_uid = (body.get("user_id") or "").strip()
                     reason = (body.get("reason") or "Account removed by moderator").strip()
@@ -2203,6 +2444,10 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     )
                     conn.execute("DELETE FROM posts WHERE author_id = ?", (target_uid,))
                     conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_uid,))
+                    conn.execute(
+                        "UPDATE moderation_reports SET status = 'taken_down' WHERE target_user_id = ? OR post_id IN (SELECT id FROM posts WHERE author_id = ?)",
+                        (target_uid, target_uid),
+                    )
                     conn.execute("DELETE FROM users WHERE id = ?", (target_uid,))
                     conn.execute(
                         "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES ('user', ?, ?)",
@@ -2243,6 +2488,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     body.get("bio") if "bio" in body else (user.get("bio") or "")
                 ).strip()
                 avatar_data_url = body.get("avatar_data_url") or ""
+                remove_avatar = bool(body.get("remove_avatar", False))
 
                 if not display_name or len(handle) < 2:
                     return self.send_json(
@@ -2257,25 +2503,71 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         {"error": f"Username @{handle} is already taken."}, 400
                     )
 
-                new_avatar_url = user.get("avatar_url") or ""
+                now_upd_ts = int(time.time())
+                new_avatar_url = "" if remove_avatar else (user.get("avatar_url") or "")
                 if avatar_data_url and "," in avatar_data_url:
                     _, b64_data = avatar_data_url.split(",", 1)
                     raw_avatar = base64.b64decode(b64_data)
+                    if Image is not None:
+                        try:
+                            im = Image.open(io.BytesIO(raw_avatar)).convert("RGB")
+                            w, h = im.size
+                            side = min(w, h)
+                            left = (w - side) // 2
+                            top = (h - side) // 2
+                            im = im.crop((left, top, left + side, top + side))
+                            if side > 512:
+                                im = im.resize((512, 512))
+                            buf = io.BytesIO()
+                            im.save(buf, format="JPEG", quality=88)
+                            raw_avatar = buf.getvalue()
+                        except Exception:
+                            pass
                     avatar_fname = f"avatar_{uid}_{int(time.time() * 1000)}.jpg"
                     (UPLOADS_DIR / avatar_fname).write_bytes(raw_avatar)
                     new_avatar_url = f"/uploads/{avatar_fname}"
                     conn.execute(
                         "INSERT OR REPLACE INTO media_blobs (url, mime_type, data, created_at) VALUES (?, ?, ?, ?)",
-                        (new_avatar_url, "image/jpeg", raw_avatar, int(time.time())),
+                        (new_avatar_url, "image/jpeg", raw_avatar, now_upd_ts),
                     )
 
                 conn.execute(
-                    "UPDATE users SET display_name = ?, handle = ?, bio = ?, avatar_url = ? WHERE id = ?",
-                    (display_name, handle, bio, new_avatar_url, uid),
+                    "UPDATE users SET display_name = ?, handle = ?, bio = ?, avatar_url = ?, updated_at = ? WHERE id = ?",
+                    (display_name, handle, bio, new_avatar_url, now_upd_ts, uid),
+                )
+                updated_u = dict(conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone())
+                new_tok = create_session_token(updated_u)
+                conn.execute(
+                    "INSERT OR REPLACE INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
+                    (new_tok, uid, now_upd_ts),
                 )
                 conn.commit()
                 create_database_backup("profile_updated")
-                return self.send_json({"ok": True, "avatar_url": new_avatar_url})
+                try:
+                    saved_settings = json.loads(updated_u.get("settings_json") or "{}")
+                except Exception:
+                    saved_settings = {}
+                return self.send_json(
+                    {
+                        "ok": True,
+                        "avatar_url": new_avatar_url,
+                        "token": new_tok,
+                        "user": {
+                            "id": updated_u["id"],
+                            "email": updated_u["email"],
+                            "handle": updated_u["handle"],
+                            "display_name": updated_u["display_name"],
+                            "bio": updated_u.get("bio") or "",
+                            "avatar_url": new_avatar_url,
+                            "account_type": updated_u["account_type"],
+                            "is_verified_institution": bool(updated_u["is_verified_institution"]),
+                            "settings": {**DEFAULT_SETTINGS, **saved_settings},
+                        },
+                    },
+                    extra_headers={
+                        "Set-Cookie": f"ivris_session={new_tok}; Max-Age=31536000; Path=/; SameSite=Lax; HttpOnly"
+                    },
+                )
 
             if parsed.path == "/api/delete-post":
                 post_id = (body.get("post_id") or "").strip()
