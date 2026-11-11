@@ -53,6 +53,7 @@ interface MusicTrack {
   artist: string;
   artwork_url: string;
   preview_url: string;
+  is_explicit?: boolean;
 }
 
 interface UserSettings {
@@ -313,7 +314,7 @@ export default function App() {
     const term = query.trim() || 'top hits';
     try {
       const res = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=20`
+        `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=50&explicit=Yes`
       );
       const data = await res.json();
       const tracks: MusicTrack[] = (data.results || [])
@@ -324,6 +325,7 @@ export default function App() {
           artist: item.artistName || 'Unknown Artist',
           artwork_url: item.artworkUrl100 || '',
           preview_url: item.previewUrl || '',
+          is_explicit: (item.trackExplicitness === 'explicit' || item.collectionExplicitness === 'explicit'),
         }));
       setMusicResults(tracks);
     } catch (_err) {
@@ -1495,7 +1497,12 @@ export default function App() {
                 }}
               >
                 <View style={styles.userRowInfo}>
-                  <Text style={styles.postUsername}>{track.title}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={styles.postUsername}>{track.title}</Text>
+                    {track.is_explicit && (
+                      <Text style={{ fontSize: 10, color: '#a1a1aa', fontWeight: 'bold' }}>[E]</Text>
+                    )}
+                  </View>
                   <Text style={styles.postLocation}>{track.artist}</Text>
                 </View>
                 <Text style={styles.sendText}>Add</Text>

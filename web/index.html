@@ -1828,7 +1828,7 @@
         appState.musicResults = data.tracks || [];
       } catch (_err) {
         try {
-          const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=song&limit=25`);
+          const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=song&limit=50&explicit=Yes`);
           const raw = await res.json();
           appState.musicResults = (raw.results || []).filter(r => r.previewUrl).map(r => ({
             id: String(r.trackId),
@@ -1836,7 +1836,8 @@
             artist: r.artistName,
             album: r.collectionName || '',
             artwork_url: r.artworkUrl100 || '',
-            preview_url: r.previewUrl
+            preview_url: r.previewUrl,
+            is_explicit: (r.trackExplicitness === 'explicit' || r.collectionExplicitness === 'explicit')
           }));
         } catch (_e) {
           appState.musicResults = [];
@@ -1859,7 +1860,10 @@
             <button type="button" onclick="selectTrackForTrimming(${idx})" class="flex-1 flex items-center gap-3 min-w-0 text-left">
               <img src="${escapeAttr(track.artwork_url)}" alt="" class="w-11 h-11 rounded-lg object-cover bg-zinc-800 shrink-0 border border-zinc-800" />
               <div class="min-w-0">
-                <p class="text-xs font-semibold text-white truncate">${escapeAttr(track.title)}</p>
+                <div class="flex items-center gap-1.5">
+                  <p class="text-xs font-semibold text-white truncate">${escapeAttr(track.title)}</p>
+                  ${track.is_explicit ? `<span class="inline-flex items-center justify-center px-1 py-0.5 text-[9px] font-bold rounded bg-zinc-800 text-zinc-300 border border-zinc-700 leading-none shrink-0" title="Explicit">E</span>` : ''}
+                </div>
                 <p class="text-[11px] text-zinc-400 truncate">${escapeAttr(track.artist)}</p>
               </div>
             </button>
@@ -2015,6 +2019,7 @@
         artist: trimmerCurrentTrack.artist,
         artwork_url: trimmerCurrentTrack.artwork_url,
         preview_url: trimmerCurrentTrack.preview_url,
+        is_explicit: Boolean(trimmerCurrentTrack.is_explicit),
         start_time: trimmerStartSec
       };
       stopPreviewAudio();

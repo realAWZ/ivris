@@ -1238,12 +1238,21 @@ def inspect_image_bytes_for_nudity(raw_bytes: bytes) -> tuple[bool, str]:
 
 
 def detect_nudity_or_explicit(
-    caption: str, location: str, raw_media_list: list[bytes] = None
+    caption: str,
+    location: str,
+    raw_media_list: list[bytes] = None,
+    music: dict = None,
 ) -> tuple[bool, str]:
     """
     Checks caption and location for explicit/nudity keywords.
+    Attached song titles, artists, and albums are exempted so songs with explicit or edgy titles never block posts.
     """
     combined_text = f"{caption or ''} {location or ''}"
+    if isinstance(music, dict):
+        for field in ("title", "artist", "album"):
+            val = str(music.get(field) or "").strip()
+            if val and len(val) >= 2:
+                combined_text = re.sub(re.escape(val), " ", combined_text, flags=re.IGNORECASE)
     match = EXPLICIT_NUDITY_PATTERN.search(combined_text)
     if match:
         return (
@@ -1345,8 +1354,14 @@ def sweep_and_delete_nudity(conn) -> int:
     deleted_count = 0
     for r in rows:
         p = dict(r)
+        music_data = None
+        if p.get("music_json"):
+            try:
+                music_data = json.loads(p["music_json"])
+            except Exception:
+                pass
         flagged, reason = detect_nudity_or_explicit(
-            p.get("caption", ""), p.get("location_label", ""), []
+            p.get("caption", ""), p.get("location_label", ""), [], music=music_data
         )
         if flagged:
             if delete_post_immediately(
@@ -1879,7 +1894,8 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         "term": query,
                         "media": "music",
                         "entity": "song",
-                        "limit": "25",
+                        "limit": "50",
+                        "explicit": "Yes",
                     }
                 )
             )
@@ -1901,6 +1917,10 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                             "album": item.get("collectionName", ""),
                             "artwork_url": item.get("artworkUrl100", ""),
                             "preview_url": item.get("previewUrl", ""),
+                            "is_explicit": (
+                                item.get("trackExplicitness") == "explicit"
+                                or item.get("collectionExplicitness") == "explicit"
+                            ),
                         }
                     )
                 return self.send_json({"tracks": tracks})
@@ -2666,7 +2686,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     return self.send_json({"error": "Invalid media files."}, 400)
 
                 is_explicit, explicit_reason = detect_nudity_or_explicit(
-                    caption, location, raw_bytes_list
+                    caption, location, raw_bytes_list, music=music
                 )
                 if is_explicit:
                     conn.execute(
