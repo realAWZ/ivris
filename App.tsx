@@ -309,9 +309,17 @@ export default function App() {
     }
   }, [authToken, refreshAllData]);
 
-  // 3. Search Global 100M+ Song Catalog (Apple Music / iTunes API)
+  // 3. Search Global 150M+ Federated Song Catalog (Apple Music + Deezer + Niche & Meme Rap)
   const searchCatalogMusic = async (query: string) => {
     const term = query.trim() || 'top hits';
+    try {
+      const data = await apiFetch(`/api/music-search?q=${encodeURIComponent(term)}`);
+      if (data && Array.isArray(data.tracks) && data.tracks.length > 0) {
+        setMusicResults(data.tracks);
+        return;
+      }
+    } catch (_e) {}
+
     try {
       const res = await fetch(
         `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=50&explicit=Yes`

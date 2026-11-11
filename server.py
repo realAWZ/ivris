@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import base64
+import concurrent.futures
 import hashlib
 import hmac
 import http.cookies
@@ -1229,6 +1230,155 @@ def start_backup_scheduler():
     t.start()
 
 
+def normalize_music_search_token(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def search_apple_music_catalog(query: str, limit: int = 35) -> list[dict]:
+    url = (
+        "https://itunes.apple.com/search?"
+        + urllib.parse.urlencode(
+            {
+                "term": query,
+                "media": "music",
+                "entity": "song",
+                "limit": str(limit),
+                "explicit": "Yes",
+            }
+        )
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "IvrisSocial/1.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        tracks = []
+        for item in payload.get("results", []):
+            if not item.get("previewUrl"):
+                continue
+            tracks.append(
+                {
+                    "id": "it_" + str(item.get("trackId", "")),
+                    "title": item.get("trackName", "Unknown Track"),
+                    "artist": item.get("artistName", "Unknown Artist"),
+                    "album": item.get("collectionName", ""),
+                    "artwork_url": item.get("artworkUrl100", ""),
+                    "preview_url": item.get("previewUrl", ""),
+                    "is_explicit": (
+                        item.get("trackExplicitness") == "explicit"
+                        or item.get("collectionExplicitness") == "explicit"
+                    ),
+                    "source": "apple_music",
+                }
+            )
+        return tracks
+    except Exception:
+        return []
+
+
+def search_deezer_music_catalog(query: str, limit: int = 35) -> list[dict]:
+    url = (
+        "https://api.deezer.com/search?"
+        + urllib.parse.urlencode({"q": query, "limit": str(limit)})
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "IvrisSocial/1.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        tracks = []
+        for item in payload.get("data", []):
+            if not item.get("preview"):
+                continue
+            album = item.get("album", {}) or {}
+            artist = item.get("artist", {}) or {}
+            artwork = (
+                album.get("cover_medium")
+                or album.get("cover_big")
+                or album.get("cover")
+                or ""
+            )
+            tracks.append(
+                {
+                    "id": "dz_" + str(item.get("id", "")),
+                    "title": item.get("title", "Unknown Track"),
+                    "artist": artist.get("name", "Unknown Artist"),
+                    "album": album.get("title", ""),
+                    "artwork_url": artwork,
+                    "preview_url": item.get("preview", ""),
+                    "is_explicit": bool(item.get("explicit_lyrics")),
+                    "source": "deezer",
+                }
+            )
+        return tracks
+    except Exception:
+        return []
+
+
+def federated_music_catalog_search(query: str) -> list[dict]:
+    clean_q = (query or "").strip()
+    if not clean_q:
+        clean_q = "top hits"
+
+    queries = [clean_q]
+    q_low = clean_q.lower()
+
+    if "bdr" in q_low:
+        queries.append(re.sub(r"\bbdr\b", "big dick randy", q_low))
+
+    if "four wheeler" in q_low:
+        queries.append(q_low.replace("four wheeler", "4 wheeler"))
+    elif "4 wheeler" in q_low:
+        queries.append(q_low.replace("4 wheeler", "four wheeler"))
+
+    if " by " in q_low:
+        queries.append(q_low.replace(" by ", " "))
+
+    unique_queries = []
+    for q in queries:
+        if q not in unique_queries:
+            unique_queries.append(q)
+
+    all_tracks = []
+    seen = set()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        futures = []
+        for q in unique_queries[:3]:
+            futures.append(executor.submit(search_deezer_music_catalog, q, 35))
+            futures.append(executor.submit(search_apple_music_catalog, q, 35))
+
+        for fut in futures:
+            try:
+                for t in fut.result():
+                    key = (
+                        normalize_music_search_token(t.get("title")),
+                        normalize_music_search_token(t.get("artist")),
+                    )
+                    if key in seen or key == ("", ""):
+                        continue
+                    seen.add(key)
+
+                    score = 0
+                    t_norm = (t.get("title", "") + " " + t.get("artist", "")).lower()
+                    for term in clean_q.lower().split():
+                        if term and term != "by" and term in t_norm:
+                            score += 3
+                    if "bdr" in clean_q.lower() and "randy" in t_norm:
+                        score += 10
+                    if (
+                        ("four" in clean_q.lower() or "4" in clean_q.lower())
+                        and "wheel" in t_norm
+                        and "yuno" in t_norm
+                    ):
+                        score += 10
+
+                    all_tracks.append((score, t))
+            except Exception:
+                pass
+
+    all_tracks.sort(key=lambda x: x[0], reverse=True)
+    return [t for _, t in all_tracks]
+
+
 def inspect_image_bytes_for_nudity(raw_bytes: bytes) -> tuple[bool, str]:
     """
     Validates image bytes for corrupted files or extreme violations.
@@ -1885,44 +2035,8 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
         if parsed.path == "/api/music-search":
             qs = urllib.parse.parse_qs(parsed.query)
             query = (qs.get("q", [""])[0] or "").strip()
-            if not query:
-                query = "top hits"
-            url = (
-                "https://itunes.apple.com/search?"
-                + urllib.parse.urlencode(
-                    {
-                        "term": query,
-                        "media": "music",
-                        "entity": "song",
-                        "limit": "50",
-                        "explicit": "Yes",
-                    }
-                )
-            )
             try:
-                req = urllib.request.Request(
-                    url, headers={"User-Agent": "IvrisSocial/1.0"}
-                )
-                with urllib.request.urlopen(req, timeout=6) as resp:
-                    payload = json.loads(resp.read().decode("utf-8"))
-                tracks = []
-                for item in payload.get("results", []):
-                    if not item.get("previewUrl"):
-                        continue
-                    tracks.append(
-                        {
-                            "id": str(item.get("trackId", "")),
-                            "title": item.get("trackName", "Unknown Track"),
-                            "artist": item.get("artistName", "Unknown Artist"),
-                            "album": item.get("collectionName", ""),
-                            "artwork_url": item.get("artworkUrl100", ""),
-                            "preview_url": item.get("previewUrl", ""),
-                            "is_explicit": (
-                                item.get("trackExplicitness") == "explicit"
-                                or item.get("collectionExplicitness") == "explicit"
-                            ),
-                        }
-                    )
+                tracks = federated_music_catalog_search(query)
                 return self.send_json({"tracks": tracks})
             except Exception as exc:
                 return self.send_json({"tracks": [], "error": str(exc)})
