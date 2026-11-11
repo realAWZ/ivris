@@ -466,9 +466,12 @@
           <div id="edit-avatar-preview-box" class="w-full h-full flex items-center justify-center"></div>
         </button>
         <input id="edit-avatar-input" type="file" accept="image/*" class="hidden" onchange="handleEditAvatarFileChange(this)" />
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap justify-center">
           <button type="button" onclick="document.getElementById('edit-avatar-input').click()" class="text-xs font-semibold text-sky-400 hover:text-sky-300">
             Change profile photo
+          </button>
+          <button id="recrop-avatar-btn" type="button" onclick="handleRecropCurrentAvatar()" class="hidden text-xs font-semibold text-zinc-300 hover:text-white">
+            Crop photo
           </button>
           <button id="remove-avatar-btn" type="button" onclick="handleStageRemoveAvatar()" class="hidden text-xs font-semibold text-rose-400 hover:text-rose-300">
             Remove photo
@@ -495,6 +498,68 @@
         Done
       </button>
     </form>
+  </dialog>
+
+  <!-- Interactive Profile Photo Crop Modal (per modern-web-guidance: dialog) -->
+  <dialog id="avatar-crop-dialog" aria-labelledby="avatar-crop-title" class="w-full max-w-sm rounded-2xl bg-zinc-900 text-white border border-zinc-800 p-5 shadow-2xl">
+    <div class="space-y-4">
+      <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+        <h3 id="avatar-crop-title" class="text-sm font-semibold">Crop profile photo</h3>
+        <form method="dialog">
+          <button type="submit" value="cancel" class="text-xs text-zinc-400 hover:text-white">Cancel</button>
+        </form>
+      </div>
+
+      <p class="text-xs text-zinc-400 text-center">Drag to reposition and use the slider to zoom.</p>
+
+      <div class="relative w-[240px] h-[240px] mx-auto rounded-2xl overflow-hidden bg-zinc-950 border border-zinc-800 select-none touch-none">
+        <canvas
+          id="avatar-crop-canvas"
+          width="512"
+          height="512"
+          onpointerdown="handleAvatarCropPointerDown(event)"
+          onwheel="handleAvatarCropWheel(event)"
+          class="w-full h-full cursor-grab active:cursor-grabbing touch-none block"
+        ></canvas>
+        <!-- Circular Avatar Mask Overlay Guide -->
+        <div class="pointer-events-none absolute inset-0 rounded-full border-2 border-white/90 shadow-[0_0_0_999px_rgba(0,0,0,0.52)]"></div>
+      </div>
+
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between text-xs text-zinc-400">
+          <span>Zoom</span>
+          <div class="flex items-center gap-2">
+            <span id="avatar-crop-zoom-label" class="font-mono text-zinc-300">1.00×</span>
+            <button type="button" onclick="resetAvatarCrop()" class="text-sky-400 hover:text-sky-300 font-semibold">Reset</button>
+          </div>
+        </div>
+        <div class="flex items-center gap-2.5">
+          <button type="button" onclick="stepAvatarCropZoom(-0.15)" aria-label="Zoom out" class="w-7 h-7 rounded-lg bg-zinc-800 text-white text-sm font-bold flex items-center justify-center">−</button>
+          <input
+            id="avatar-crop-zoom"
+            type="range"
+            min="1"
+            max="3.5"
+            step="0.02"
+            value="1"
+            oninput="handleAvatarCropZoom(this.value)"
+            class="flex-1 accent-sky-500 cursor-pointer h-2 bg-zinc-800 rounded-lg"
+          />
+          <button type="button" onclick="stepAvatarCropZoom(0.15)" aria-label="Zoom in" class="w-7 h-7 rounded-lg bg-zinc-800 text-white text-sm font-bold flex items-center justify-center">+</button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2 pt-1">
+        <form method="dialog">
+          <button type="submit" value="cancel" class="w-full py-2.5 rounded-xl bg-zinc-800 text-xs font-semibold text-white">
+            Cancel
+          </button>
+        </form>
+        <button id="confirm-avatar-crop-btn" type="button" autofocus onclick="confirmAvatarCrop()" class="w-full py-2.5 rounded-xl bg-sky-500 text-xs font-semibold text-white">
+          Apply Crop
+        </button>
+      </div>
+    </div>
   </dialog>
 
   <!-- Change Password Modal (Light-Dismiss enabled via closedby="any") -->
@@ -1178,63 +1243,193 @@
       render();
     }
 
-    function cropAndCompressAvatar(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = reject;
-        reader.onload = () => {
-          const img = new Image();
-          img.onerror = reject;
-          img.onload = () => {
-            const size = 512;
-            const canvas = document.createElement('canvas');
-            canvas.width = size;
-            canvas.height = size;
-            const ctx = canvas.getContext('2d');
-            const minSide = Math.min(img.width, img.height);
-            const sx = (img.width - minSide) / 2;
-            const sy = (img.height - minSide) / 2;
-            ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
-            resolve(canvas.toDataURL('image/jpeg', 0.88));
-          };
-          img.src = reader.result;
-        };
-        reader.readAsDataURL(file);
-      });
+    let avatarCropImg = null;
+    let avatarCropZoom = 1;
+    let avatarCropOffsetX = 0;
+    let avatarCropOffsetY = 0;
+    let avatarCropDragging = false;
+    let avatarCropStartX = 0;
+    let avatarCropStartY = 0;
+    let avatarCropCallback = null;
+    let lastRawAvatarSrc = '';
+
+    function clampAvatarCropOffsets() {
+      if (!avatarCropImg) return;
+      const size = 512;
+      const baseScale = Math.max(size / avatarCropImg.width, size / avatarCropImg.height);
+      const scale = baseScale * avatarCropZoom;
+      const drawW = avatarCropImg.width * scale;
+      const drawH = avatarCropImg.height * scale;
+      const maxX = Math.max(0, (drawW - size) / 2);
+      const maxY = Math.max(0, (drawH - size) / 2);
+      avatarCropOffsetX = Math.max(-maxX, Math.min(maxX, avatarCropOffsetX));
+      avatarCropOffsetY = Math.max(-maxY, Math.min(maxY, avatarCropOffsetY));
     }
 
-    async function handleQuickAvatarUpload(inputEl) {
-      const file = inputEl?.files?.[0];
-      if (!file || !appState.user) return;
-      try {
-        const dataUrl = await cropAndCompressAvatar(file);
-        appState.user.avatar_url = dataUrl;
-        render();
-        const res = await apiFetch('/api/update-profile', {
-          method: 'POST',
-          body: JSON.stringify({
-            display_name: appState.user.display_name,
-            handle: appState.user.handle,
-            bio: appState.user.bio || '',
-            avatar_data_url: dataUrl
-          })
-        });
-        if (res.token || res.user) {
-          persistAuthSession(res.token || appState.token, res.user || appState.user);
+    function renderAvatarCropCanvas() {
+      const canvas = document.getElementById('avatar-crop-canvas');
+      if (!canvas || !avatarCropImg) return;
+      const ctx = canvas.getContext('2d');
+      const size = 512;
+      ctx.clearRect(0, 0, size, size);
+      ctx.fillStyle = '#09090b';
+      ctx.fillRect(0, 0, size, size);
+
+      clampAvatarCropOffsets();
+      const baseScale = Math.max(size / avatarCropImg.width, size / avatarCropImg.height);
+      const scale = baseScale * avatarCropZoom;
+      const drawW = avatarCropImg.width * scale;
+      const drawH = avatarCropImg.height * scale;
+      const dx = (size - drawW) / 2 + avatarCropOffsetX;
+      const dy = (size - drawH) / 2 + avatarCropOffsetY;
+      ctx.drawImage(avatarCropImg, dx, dy, drawW, drawH);
+
+      const zoomInput = document.getElementById('avatar-crop-zoom');
+      if (zoomInput) zoomInput.value = String(avatarCropZoom);
+      const zoomLabel = document.getElementById('avatar-crop-zoom-label');
+      if (zoomLabel) zoomLabel.textContent = `${avatarCropZoom.toFixed(2)}×`;
+    }
+
+    function handleAvatarCropZoom(val) {
+      avatarCropZoom = Math.max(1, Math.min(3.5, Number(val) || 1));
+      renderAvatarCropCanvas();
+    }
+
+    function stepAvatarCropZoom(delta) {
+      handleAvatarCropZoom(avatarCropZoom + delta);
+    }
+
+    function resetAvatarCrop() {
+      avatarCropZoom = 1;
+      avatarCropOffsetX = 0;
+      avatarCropOffsetY = 0;
+      renderAvatarCropCanvas();
+    }
+
+    function handleAvatarCropWheel(e) {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 0.08 : -0.08;
+      handleAvatarCropZoom(avatarCropZoom + delta);
+    }
+
+    function handleAvatarCropPointerDown(e) {
+      if (!avatarCropImg) return;
+      e.preventDefault();
+      const canvas = document.getElementById('avatar-crop-canvas');
+      if (!canvas) return;
+      if (canvas.setPointerCapture && e.pointerId != null) {
+        try { canvas.setPointerCapture(e.pointerId); } catch (_e) {}
+      }
+      avatarCropDragging = true;
+      avatarCropStartX = e.clientX;
+      avatarCropStartY = e.clientY;
+      const rect = canvas.getBoundingClientRect();
+      const ratio = 512 / Math.max(1, rect.width);
+
+      const onMove = (ev) => {
+        if (!avatarCropDragging) return;
+        const dx = (ev.clientX - avatarCropStartX) * ratio;
+        const dy = (ev.clientY - avatarCropStartY) * ratio;
+        avatarCropStartX = ev.clientX;
+        avatarCropStartY = ev.clientY;
+        avatarCropOffsetX += dx;
+        avatarCropOffsetY += dy;
+        renderAvatarCropCanvas();
+      };
+
+      const onUp = (ev) => {
+        avatarCropDragging = false;
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        if (canvas.releasePointerCapture && ev?.pointerId != null) {
+          try { canvas.releasePointerCapture(ev.pointerId); } catch (_e) {}
         }
-        inputEl.value = '';
-        await loadLiveData();
-      } catch (err) {
-        alert(err.message || 'Could not update profile picture');
-        await loadLiveData();
+      };
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    }
+
+    function openAvatarCropModalFromSrc(src, onConfirm) {
+      if (!src) return;
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        avatarCropImg = img;
+        avatarCropZoom = 1;
+        avatarCropOffsetX = 0;
+        avatarCropOffsetY = 0;
+        avatarCropCallback = onConfirm;
+        const dlg = document.getElementById('avatar-crop-dialog');
+        if (dlg && !dlg.open) dlg.showModal();
+        renderAvatarCropCanvas();
+      };
+      img.onerror = () => {
+        alert('Could not load selected image for cropping.');
+      };
+      img.src = src;
+    }
+
+    function openAvatarCropModalFromFile(file, onConfirm) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        lastRawAvatarSrc = reader.result;
+        openAvatarCropModalFromSrc(reader.result, onConfirm);
+      };
+      reader.onerror = () => alert('Could not read image file.');
+      reader.readAsDataURL(file);
+    }
+
+    async function confirmAvatarCrop() {
+      const canvas = document.getElementById('avatar-crop-canvas');
+      if (!canvas || !avatarCropImg) return;
+      renderAvatarCropCanvas();
+      const croppedDataUrl = canvas.toDataURL('image/jpeg', 0.90);
+      const dlg = document.getElementById('avatar-crop-dialog');
+      if (dlg && dlg.open) dlg.close('apply');
+      if (typeof avatarCropCallback === 'function') {
+        const cb = avatarCropCallback;
+        avatarCropCallback = null;
+        await cb(croppedDataUrl);
       }
     }
 
-    async function handleEditAvatarFileChange(inputEl) {
+    function handleQuickAvatarUpload(inputEl) {
+      const file = inputEl?.files?.[0];
+      if (!file || !appState.user) return;
+      inputEl.value = '';
+      openAvatarCropModalFromFile(file, async (dataUrl) => {
+        try {
+          appState.user.avatar_url = dataUrl;
+          render();
+          const res = await apiFetch('/api/update-profile', {
+            method: 'POST',
+            body: JSON.stringify({
+              display_name: appState.user.display_name,
+              handle: appState.user.handle,
+              bio: appState.user.bio || '',
+              avatar_data_url: dataUrl
+            })
+          });
+          if (res.token || res.user) {
+            persistAuthSession(res.token || appState.token, res.user || appState.user);
+          }
+          await loadLiveData();
+        } catch (err) {
+          alert(err.message || 'Could not update profile picture');
+          await loadLiveData();
+        }
+      });
+    }
+
+    function handleEditAvatarFileChange(inputEl) {
       const file = inputEl?.files?.[0];
       if (!file) return;
-      try {
-        const dataUrl = await cropAndCompressAvatar(file);
+      inputEl.value = '';
+      openAvatarCropModalFromFile(file, (dataUrl) => {
         appState.pendingAvatarDataUrl = dataUrl;
         appState.pendingRemoveAvatar = false;
         const box = document.getElementById('edit-avatar-preview-box');
@@ -1243,12 +1438,28 @@
         }
         const remBtn = document.getElementById('remove-avatar-btn');
         if (remBtn) remBtn.classList.remove('hidden');
-      } catch (_e) {}
+        const recropBtn = document.getElementById('recrop-avatar-btn');
+        if (recropBtn) recropBtn.classList.remove('hidden');
+      });
+    }
+
+    function handleRecropCurrentAvatar() {
+      const src = lastRawAvatarSrc || appState.pendingAvatarDataUrl || (appState.user && appState.user.avatar_url) || '';
+      if (!src) return;
+      openAvatarCropModalFromSrc(src, (dataUrl) => {
+        appState.pendingAvatarDataUrl = dataUrl;
+        appState.pendingRemoveAvatar = false;
+        const box = document.getElementById('edit-avatar-preview-box');
+        if (box) {
+          box.innerHTML = `<img src="${escapeAttr(dataUrl)}" alt="New profile preview" class="w-full h-full rounded-full object-cover" />`;
+        }
+      });
     }
 
     function handleStageRemoveAvatar() {
       appState.pendingAvatarDataUrl = '';
       appState.pendingRemoveAvatar = true;
+      lastRawAvatarSrc = '';
       const inputEl = document.getElementById('edit-avatar-input');
       if (inputEl) inputEl.value = '';
       const box = document.getElementById('edit-avatar-preview-box');
@@ -1257,6 +1468,8 @@
       }
       const remBtn = document.getElementById('remove-avatar-btn');
       if (remBtn) remBtn.classList.add('hidden');
+      const recropBtn = document.getElementById('recrop-avatar-btn');
+      if (recropBtn) recropBtn.classList.add('hidden');
     }
 
     function openEditProfileModal() {
@@ -1274,6 +1487,11 @@
       if (remBtn) {
         if (appState.user.avatar_url) remBtn.classList.remove('hidden');
         else remBtn.classList.add('hidden');
+      }
+      const recropBtn = document.getElementById('recrop-avatar-btn');
+      if (recropBtn) {
+        if (appState.user.avatar_url) recropBtn.classList.remove('hidden');
+        else recropBtn.classList.add('hidden');
       }
       document.getElementById('edit-display-name').value = appState.user.display_name || '';
       document.getElementById('edit-handle').value = appState.user.handle || '';
@@ -1477,13 +1695,50 @@
       syncSelectedMusicUI();
     }
 
+    const sharedFeedAudioEl = new Audio();
+    sharedFeedAudioEl.preload = 'auto';
+    let feedAudioUnlocked = false;
+    let pendingAutoplayRetry = false;
+
+    function unlockSharedAudioOnInteraction() {
+      if (!feedAudioUnlocked) {
+        feedAudioUnlocked = true;
+        try {
+          sharedFeedAudioEl.muted = Boolean(appState.isMuted);
+          if (!sharedFeedAudioEl.src) {
+            sharedFeedAudioEl.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+            const p = sharedFeedAudioEl.play();
+            if (p && typeof p.then === 'function') {
+              p.then(() => {
+                if (!activeAutoPostId) sharedFeedAudioEl.pause();
+              }).catch(() => {});
+            }
+          }
+        } catch (_e) {}
+      }
+      if (pendingAutoplayRetry && !appState.isMuted) {
+        pendingAutoplayRetry = false;
+        if (activeAudioEl && activeAutoPostId) {
+          activeAudioEl.muted = false;
+          activeAudioEl.play().catch(() => {});
+        } else {
+          syncAutoPostMusic();
+        }
+      }
+    }
+    ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(evt => {
+      window.addEventListener(evt, unlockSharedAudioOnInteraction, { passive: true });
+    });
+
     function stopPreviewAudio() {
       if (activeAudioEl) {
         try {
           activeAudioEl.pause();
-          activeAudioEl.currentTime = 0;
-          activeAudioEl.src = '';
-          activeAudioEl.load();
+          activeAudioEl.onended = null;
+          if (activeAudioEl !== sharedFeedAudioEl) {
+            activeAudioEl.src = '';
+            activeAudioEl.load();
+          }
         } catch (_e) {}
         activeAudioEl = null;
       }
@@ -1780,38 +2035,73 @@
         return;
       }
       const startSec = Math.max(0, Math.min(29, Number(post.music.start_time || 0)));
-      if (activeAutoPostId === post.id && activeAudioEl && !activeAudioEl.paused) {
-        return;
+      const isMuted = Boolean(appState.isMuted);
+
+      if (activeAutoPostId === post.id && activeAudioEl) {
+        activeAudioEl.muted = isMuted;
+        if (isMuted) {
+          if (!activeAudioEl.paused) {
+            try { activeAudioEl.pause(); } catch (_e) {}
+          }
+          return;
+        }
+        if (!activeAudioEl.paused) {
+          return;
+        }
       }
+
       stopPreviewAudio();
       activeAutoPostId = post.id;
       activeAutoStartSec = startSec;
       appState.playingPostId = post.id;
-      const audio = new Audio(post.music.preview_url);
+
+      const audio = sharedFeedAudioEl;
+      audio.muted = isMuted;
+      if (audio.src !== post.music.preview_url) {
+        audio.src = post.music.preview_url;
+      }
       activeAudioEl = audio;
+
+      // CRITICAL: If user muted audio, keep activeAudioEl prepared & muted, and NEVER play sound
+      if (isMuted) {
+        try { audio.pause(); } catch (_e) {}
+        return;
+      }
+
       const seekAndPlay = () => {
-        if (document.hidden || activeAudioEl !== audio) {
+        if (document.hidden || activeAudioEl !== audio || appState.isMuted) {
+          audio.muted = Boolean(appState.isMuted);
           try { audio.pause(); } catch (_e) {}
           return;
         }
+        audio.muted = false;
         try {
-          audio.currentTime = startSec;
+          if (Math.abs(audio.currentTime - startSec) > 0.6) {
+            audio.currentTime = startSec;
+          }
         } catch (_e) {}
-        audio.play().catch(() => {});
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          playPromise.catch(() => {
+            pendingAutoplayRetry = true;
+          });
+        }
       };
+
       if (audio.readyState >= 1) {
         seekAndPlay();
       } else {
         audio.addEventListener('loadedmetadata', seekAndPlay, { once: true });
         audio.addEventListener('canplay', () => {
-          if (Math.abs(audio.currentTime - startSec) > 0.5) {
+          if (activeAudioEl === audio && !appState.isMuted && Math.abs(audio.currentTime - startSec) > 0.6) {
             try { audio.currentTime = startSec; } catch (_e) {}
           }
         }, { once: true });
       }
       audio.onended = () => {
-        if (!document.hidden && activeAutoPostId === post.id && activeAudioEl === audio) {
+        if (!document.hidden && activeAutoPostId === post.id && activeAudioEl === audio && !appState.isMuted) {
           try {
+            audio.muted = false;
             audio.currentTime = activeAutoStartSec;
             audio.play().catch(() => {});
           } catch (_e) {}
@@ -1819,25 +2109,60 @@
       };
     }
 
-    function checkActiveMusicViewportVisibility() {
+    function evaluateBestVisibleMusicPost() {
       if (document.hidden || document.visibilityState !== 'visible') {
         stopPreviewAudio();
         return;
       }
-      if (appState.screen !== 'main') return;
-      if (!activeAutoPostId) return;
-      const el = document.querySelector(`article[data-music-post-id="${activeAutoPostId}"]`);
-      if (!el) {
+      if (document.querySelector('dialog[open]')) return;
+      if (appState.screen === 'myPost' && appState.selectedMyPost) {
+        startAutoPostAudio(appState.selectedMyPost);
+        return;
+      }
+      if (appState.screen === 'userPost' && appState.selectedUserPost) {
+        startAutoPostAudio(appState.selectedUserPost);
+        return;
+      }
+      if (appState.screen !== 'main') {
         stopPreviewAudio();
         return;
       }
-      const rect = el.getBoundingClientRect();
-      const vh = window.innerHeight || document.documentElement.clientHeight;
-      const visibleHeight = Math.max(0, Math.min(rect.bottom, vh) - Math.max(rect.top, 0));
-      const ratio = rect.height > 0 ? visibleHeight / rect.height : 0;
-      if (ratio < 0.5) {
+      const articles = document.querySelectorAll('article[data-music-post-id]');
+      if (!articles.length) {
+        stopPreviewAudio();
+        return;
+      }
+      const vh = window.innerHeight || document.documentElement.clientHeight || 800;
+      let bestPid = null;
+      let bestScore = 0;
+
+      articles.forEach(el => {
+        const pid = el.getAttribute('data-music-post-id');
+        if (!pid) return;
+        const rect = el.getBoundingClientRect();
+        if (rect.height <= 0) return;
+        const visibleTop = Math.max(0, rect.top);
+        const visibleBottom = Math.min(vh, rect.bottom);
+        const visiblePx = Math.max(0, visibleBottom - visibleTop);
+        const ratio = visiblePx / rect.height;
+        if (visiblePx >= 110 || ratio >= 0.25) {
+          if (visiblePx > bestScore) {
+            bestScore = visiblePx;
+            bestPid = pid;
+          }
+        }
+      });
+
+      if (bestPid) {
+        const post = appState.feedPosts.find(p => p.id === bestPid);
+        if (post) startAutoPostAudio(post);
+      } else {
         stopPreviewAudio();
       }
+    }
+
+    function checkActiveMusicViewportVisibility() {
+      evaluateBestVisibleMusicPost();
     }
 
     function syncAutoPostMusic() {
@@ -1865,32 +2190,18 @@
           stopPreviewAudio();
           return;
         }
-        feedMusicObserver = new IntersectionObserver((entries) => {
-          for (const entry of entries) {
-            const pid = entry.target.getAttribute('data-music-post-id');
-            if (!pid) continue;
-            visibleMusicRatios.set(pid, entry.isIntersecting ? entry.intersectionRatio : 0);
-          }
-          let bestPid = null;
-          let bestRatio = 0;
-          for (const [pid, ratio] of visibleMusicRatios.entries()) {
-            if (ratio >= 0.55 && ratio > bestRatio) {
-              bestRatio = ratio;
-              bestPid = pid;
-            }
-          }
-          if (bestPid) {
-            const post = appState.feedPosts.find(p => p.id === bestPid);
-            if (post) startAutoPostAudio(post);
-          } else {
-            stopPreviewAudio();
-          }
-        }, { threshold: [0, 0.25, 0.5, 0.55, 0.75, 0.95] });
+        evaluateBestVisibleMusicPost();
+        feedMusicObserver = new IntersectionObserver(() => {
+          evaluateBestVisibleMusicPost();
+        }, { threshold: [0, 0.15, 0.25, 0.4, 0.55, 0.75, 0.95] });
         articles.forEach(a => feedMusicObserver.observe(a));
         return;
       }
       stopPreviewAudio();
     }
+    window.addEventListener('scroll', () => {
+      if (appState.screen === 'main') evaluateBestVisibleMusicPost();
+    }, { passive: true });
 
     async function recordPostView(postId) {
       if (!postId || !appState.user) return;
@@ -2046,12 +2357,22 @@
       if (activeStoryAudioEl) {
         try { activeStoryAudioEl.pause(); } catch (_e) {}
       }
+      const vid = document.getElementById('active-story-video');
+      if (vid) {
+        try { vid.pause(); } catch (_e) {}
+      }
     }
 
     function resumeStoryTimer() {
       storyPaused = false;
       if (activeStoryAudioEl && !appState.isMuted) {
+        activeStoryAudioEl.muted = false;
         activeStoryAudioEl.play().catch(() => {});
+      }
+      const vid = document.getElementById('active-story-video');
+      if (vid) {
+        vid.muted = Boolean(appState.isMuted);
+        vid.play().catch(() => {});
       }
     }
 
@@ -2064,8 +2385,18 @@
       audio.muted = Boolean(appState.isMuted);
       activeStoryAudioEl = audio;
 
+      if (appState.isMuted) {
+        try { audio.pause(); } catch (_e) {}
+        return;
+      }
+
       const seekAndPlay = () => {
-        if (document.hidden || activeStoryAudioEl !== audio) return;
+        if (document.hidden || activeStoryAudioEl !== audio || appState.isMuted) {
+          audio.muted = Boolean(appState.isMuted);
+          try { audio.pause(); } catch (_e) {}
+          return;
+        }
+        audio.muted = false;
         try { audio.currentTime = startSec; } catch (_e) {}
         audio.play().catch(() => {});
       };
@@ -2096,14 +2427,36 @@
         localStorage.setItem('ivris_is_muted', appState.isMuted ? '1' : '0');
       } catch (_e) {}
 
-      if (activeStoryAudioEl) {
-        activeStoryAudioEl.muted = appState.isMuted;
-        if (!appState.isMuted && activeStoryAudioEl.paused) {
-          activeStoryAudioEl.play().catch(() => {});
+      const story = appState.storyQueue[appState.storyQueueIdx];
+      if (appState.isMuted) {
+        if (activeStoryAudioEl) {
+          activeStoryAudioEl.muted = true;
+          try { activeStoryAudioEl.pause(); } catch (_e) {}
+        }
+      } else {
+        if (activeStoryAudioEl) {
+          activeStoryAudioEl.muted = false;
+          if (activeStoryAudioEl.paused) {
+            activeStoryAudioEl.play().catch(() => {});
+          }
+        } else if (story && story.music && story.music.preview_url) {
+          startStoryAudio(story);
         }
       }
+
+      const vid = document.getElementById('active-story-video');
+      if (vid) {
+        vid.muted = Boolean(appState.isMuted);
+        if (!appState.isMuted && vid.paused && !storyPaused) {
+          vid.play().catch(() => {});
+        }
+      }
+
       if (activeAudioEl) {
-        activeAudioEl.muted = appState.isMuted;
+        activeAudioEl.muted = Boolean(appState.isMuted);
+        if (appState.isMuted) {
+          try { activeAudioEl.pause(); } catch (_e) {}
+        }
       }
       updateStorySpeakerIcon();
       syncAllPostSpeakerIcons();
@@ -2187,9 +2540,10 @@
         if (stickerEl) stickerEl.classList.add('hidden');
       }
 
+      const isVideoStory = (story.media_url || '').endsWith('.mp4');
       const speakerBtn = document.getElementById('story-speaker-btn');
       if (speakerBtn) {
-        speakerBtn.classList.toggle('hidden', !(story.music && story.music.preview_url));
+        speakerBtn.classList.toggle('hidden', !(Boolean(story.music && story.music.preview_url) || isVideoStory));
         updateStorySpeakerIcon();
       }
 
@@ -2203,16 +2557,23 @@
       storyDurationMs = 5000;
       storyPaused = false;
 
-      if ((story.media_url || '').endsWith('.mp4')) {
-        box.innerHTML = `<video id="active-story-video" src="${escapeAttr(story.media_url)}" autoplay playsinline draggable="false" oncontextmenu="return false;" class="w-full h-full object-cover pointer-events-none select-none"></video>`;
+      if (isVideoStory) {
+        const hasSeparateMusic = Boolean(story.music && story.music.preview_url);
+        const videoMuted = Boolean(appState.isMuted || hasSeparateMusic);
+        box.innerHTML = `<video id="active-story-video" src="${escapeAttr(story.media_url)}" width="430" height="764" autoplay playsinline ${videoMuted ? 'muted' : ''} draggable="false" oncontextmenu="return false;" class="w-full h-full object-cover pointer-events-none select-none"></video>`;
         const vid = document.getElementById('active-story-video');
         if (vid) {
+          vid.muted = videoMuted;
           vid.onloadedmetadata = () => {
             if (vid.duration && isFinite(vid.duration)) {
               storyDurationMs = Math.max(2000, Math.min(30000, vid.duration * 1000));
             }
           };
           vid.onended = () => stepStoryQueue(1);
+          vid.play().catch(() => {
+            vid.muted = true;
+            vid.play().catch(() => {});
+          });
         }
       } else {
         box.innerHTML = `<img src="${escapeAttr(story.media_url)}" alt="Story" draggable="false" oncontextmenu="return false;" class="w-full h-full object-cover pointer-events-none select-none" />`;
@@ -2580,10 +2941,31 @@
       await loadLiveData();
     }
 
-    async function handleConnectionClick(targetId) {
+    async function handleConnectionClick(targetId, explicitAction = '') {
+      if (!targetId) return;
+      const uid = appState.user?.id;
+      const conn = appState.connections.find(c =>
+        (c.requester_id === uid && c.addressee_id === targetId) ||
+        (c.requester_id === targetId && c.addressee_id === uid)
+      );
+      let action = explicitAction;
+      if (!action) {
+        if (!conn) {
+          action = 'request';
+        } else if (conn.status === 'accepted') {
+          const prof = appState.allProfiles.find(p => p.id === targetId);
+          const handleLabel = prof ? `@${prof.handle}` : 'this user';
+          if (!confirm(`Remove ${handleLabel} from your connections?`)) return;
+          action = 'remove';
+        } else if (conn.status === 'pending' && conn.addressee_id === uid) {
+          action = 'accept';
+        } else {
+          action = 'cancel';
+        }
+      }
       await apiFetch('/api/connect', {
         method: 'POST',
-        body: JSON.stringify({ target_id: targetId })
+        body: JSON.stringify({ target_id: targetId, action })
       });
       await loadLiveData();
     }
@@ -2670,23 +3052,18 @@
       carouselTouchStartTime = Date.now();
     }
 
-    function handleCarouselTouchEnd(e, postId, total, hasAudio) {
+    let lastMuteToggleTs = 0;
+
+    function handleCarouselTouchEnd(e, postId, total, _hasAudio) {
+      if (e.target && e.target.closest && e.target.closest('button')) return;
       const t = e.changedTouches && e.changedTouches[0];
       if (!t) return;
       const dx = t.clientX - carouselTouchStartX;
       const dy = t.clientY - carouselTouchStartY;
-      const dt = Date.now() - carouselTouchStartTime;
 
       if (Math.abs(dx) > 35 && Math.abs(dx) > Math.abs(dy) * 1.3 && total > 1) {
         stepCarousel(postId, dx < 0 ? 1 : -1, total);
         return;
-      }
-
-      // Quick tap to mute/unmute
-      if (Math.abs(dx) < 15 && Math.abs(dy) < 15 && dt < 450) {
-        if (hasAudio) {
-          togglePostMute(e, postId);
-        }
       }
     }
 
@@ -2696,26 +3073,54 @@
       togglePostMute(e, postId);
     }
 
+    function findPostById(postId) {
+      if (!postId) return null;
+      return (
+        appState.feedPosts.find(p => p.id === postId) ||
+        appState.myPosts.find(p => p.id === postId) ||
+        (appState.selectedMyPost && appState.selectedMyPost.id === postId ? appState.selectedMyPost : null) ||
+        (appState.selectedUserPost && appState.selectedUserPost.id === postId ? appState.selectedUserPost : null)
+      );
+    }
+
     function togglePostMute(e, postId) {
       if (e) {
         e.stopPropagation();
         e.preventDefault();
       }
+      const now = Date.now();
+      if (now - lastMuteToggleTs < 200) return;
+      lastMuteToggleTs = now;
+
       appState.isMuted = !appState.isMuted;
       try {
         localStorage.setItem('ivris_is_muted', appState.isMuted ? '1' : '0');
       } catch (_e) {}
 
-      if (activeAudioEl) {
-        activeAudioEl.muted = appState.isMuted;
-        if (!appState.isMuted && activeAudioEl.paused) {
+      if (appState.isMuted) {
+        if (activeAudioEl) {
+          activeAudioEl.muted = true;
+          try { activeAudioEl.pause(); } catch (_e) {}
+        }
+        if (activeStoryAudioEl) {
+          activeStoryAudioEl.muted = true;
+          try { activeStoryAudioEl.pause(); } catch (_e) {}
+        }
+      } else {
+        const targetPost = findPostById(postId);
+        if (activeAudioEl && activeAutoPostId === postId) {
+          activeAudioEl.muted = false;
+          if (activeAudioEl.paused) {
+            activeAudioEl.play().catch(() => {});
+          }
+        } else if (targetPost && targetPost.music && targetPost.music.preview_url) {
+          startAutoPostAudio(targetPost);
+        } else if (activeAudioEl) {
+          activeAudioEl.muted = false;
           activeAudioEl.play().catch(() => {});
         }
-      }
-      if (activeStoryAudioEl) {
-        activeStoryAudioEl.muted = appState.isMuted;
-        if (!appState.isMuted && activeStoryAudioEl.paused) {
-          activeStoryAudioEl.play().catch(() => {});
+        if (activeStoryAudioEl) {
+          activeStoryAudioEl.muted = false;
         }
       }
 
@@ -3456,11 +3861,14 @@
                   (c.requester_id === uid && c.addressee_id === item.id) ||
                   (c.requester_id === item.id && c.addressee_id === uid)
                 );
+                const isIncomingPending = Boolean(conn && conn.status === 'pending' && conn.addressee_id === uid);
+                const isOutgoingPending = Boolean(conn && conn.status === 'pending' && conn.requester_id === uid);
+                const isAccepted = Boolean(conn && conn.status === 'accepted');
                 const label = !conn
                   ? (item.account_type === 'institution' ? 'Follow' : 'Add')
-                  : conn.status === 'accepted'
+                  : isAccepted
                   ? 'Connected'
-                  : conn.addressee_id === uid
+                  : isIncomingPending
                   ? 'Accept'
                   : 'Requested';
 
@@ -3479,9 +3887,18 @@
                       </div>
                     </button>
                     <div class="flex items-center gap-1.5 shrink-0">
-                      <button onclick="handleConnectionClick('${item.id}')" class="h-8 px-4 rounded-lg bg-sky-500 text-white text-xs font-semibold whitespace-nowrap">
-                        ${label}
-                      </button>
+                      ${isIncomingPending ? `
+                        <button onclick="handleConnectionClick('${item.id}', 'accept')" class="h-8 px-3.5 rounded-lg bg-sky-500 text-white text-xs font-semibold whitespace-nowrap">
+                          Accept
+                        </button>
+                        <button onclick="handleConnectionClick('${item.id}', 'decline')" class="h-8 px-3 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs font-semibold whitespace-nowrap">
+                          Decline
+                        </button>
+                      ` : `
+                        <button onclick="handleConnectionClick('${item.id}')" class="h-8 px-4 rounded-lg ${isAccepted || isOutgoingPending ? 'bg-zinc-900 border border-zinc-800 text-zinc-200' : 'bg-sky-500 text-white'} text-xs font-semibold whitespace-nowrap">
+                          ${label}
+                        </button>
+                      `}
                       <button type="button" onclick="openReportAccountModal('${escapeAttr(item.id)}', '${escapeAttr(item.handle)}')" aria-label="Report or block @${escapeAttr(item.handle)}" class="w-8 h-8 rounded-lg flex items-center justify-center text-zinc-400 hover:text-rose-400">
                         <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
                       </button>
@@ -3568,28 +3985,14 @@
               </div>
 
               <!-- Clean Instagram Profile Buttons -->
-              ${(appState.user.is_moderator || ['moderator', 'ayden', 'awz', 'zoscha'].includes((appState.user.handle || '').toLowerCase())) ? `
-                <div class="grid grid-cols-3 gap-2">
-                  <button onclick="openEditProfileModal()" class="h-8 rounded-lg bg-zinc-900 text-xs font-semibold">
-                    Edit profile
-                  </button>
-                  <button onclick="navigate('settings')" class="h-8 rounded-lg bg-zinc-900 text-xs font-semibold">
-                    Settings
-                  </button>
-                  <button onclick="openInAppModerationConsole()" class="h-8 rounded-lg bg-sky-500/20 border border-sky-500/40 text-sky-400 text-xs font-semibold">
-                    Moderation
-                  </button>
-                </div>
-              ` : `
-                <div class="grid grid-cols-2 gap-2">
-                  <button onclick="openEditProfileModal()" class="h-8 rounded-lg bg-zinc-900 text-xs font-semibold">
-                    Edit profile
-                  </button>
-                  <button onclick="navigate('settings')" class="h-8 rounded-lg bg-zinc-900 text-xs font-semibold">
-                    Settings
-                  </button>
-                </div>
-              `}
+              <div class="grid grid-cols-2 gap-2">
+                <button onclick="openEditProfileModal()" class="h-8 rounded-lg bg-zinc-900 text-xs font-semibold">
+                  Edit profile
+                </button>
+                <button onclick="navigate('settings')" class="h-8 rounded-lg bg-zinc-900 text-xs font-semibold">
+                  Settings
+                </button>
+              </div>
             </div>
 
             <div class="border-t border-zinc-900 pt-0.5 grid grid-cols-3 gap-0.5">
@@ -3619,7 +4022,6 @@
         const curScheme = appState.colorScheme || 'light dark';
         const resolvedTheme = document.documentElement.dataset.theme || 'dark';
         const schemeIdx = curScheme === 'light' ? 0 : curScheme === 'dark' ? 1 : 2;
-        const canModerate = Boolean(appState.user.is_moderator || ['moderator', 'ayden', 'awz', 'zoscha'].includes((appState.user.handle || '').toLowerCase()));
         bodyHtml = `
           <div class="px-4 py-4 space-y-5 pb-12">
             <!-- Profile Quick Card -->
@@ -3677,43 +4079,6 @@
                     </button>
                   </div>
                 </div>
-              </div>
-            </div>
-
-            <!-- Moderation & Safety Console Control -->
-            <div class="space-y-1.5">
-              <h2 class="px-1 text-xs font-semibold text-zinc-400">Moderation &amp; trust safety</h2>
-              <div class="rounded-2xl bg-zinc-900/70 border border-zinc-800/80 divide-y divide-zinc-800/70 overflow-hidden">
-                ${canModerate ? `
-                  <button type="button" onclick="openInAppModerationConsole()" class="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-zinc-900 transition">
-                    <div class="flex items-center gap-3 min-w-0">
-                      <svg class="w-5 h-5 text-sky-400 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
-                      </svg>
-                      <div class="min-w-0">
-                        <span class="text-xs font-semibold text-sky-400 block">Open Moderation Console</span>
-                        <span class="text-xs text-zinc-400 block">Review account/post reports, manage accounts &amp; backups</span>
-                      </div>
-                    </div>
-                    <svg class="w-4 h-4 text-sky-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
-                    </svg>
-                  </button>
-                ` : ''}
-                <a href="/moderation" class="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-zinc-900 transition">
-                  <div class="flex items-center gap-3 min-w-0">
-                    <svg class="w-5 h-5 text-zinc-300 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
-                    </svg>
-                    <div class="min-w-0">
-                      <span class="text-xs font-semibold block">Full-screen Moderation Dashboard (/moderation)</span>
-                      <span class="text-xs text-zinc-400 block">Open standalone table console in browser</span>
-                    </div>
-                  </div>
-                  <svg class="w-4 h-4 text-zinc-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
-                  </svg>
-                </a>
               </div>
             </div>
 
@@ -3914,12 +4279,14 @@
           (c.requester_id === uid && c.addressee_id === prof.id) ||
           (c.requester_id === prof.id && c.addressee_id === uid)
         );
-        const isConnected = Boolean(conn && (conn.status === 'accepted' || conn.requester_id === uid)) || Boolean(prof.is_verified_institution);
+        const isConnected = Boolean(conn && conn.status === 'accepted') || Boolean(prof.is_verified_institution);
+        const isIncomingPending = Boolean(conn && conn.status === 'pending' && conn.addressee_id === uid);
+        const isOutgoingPending = Boolean(conn && conn.status === 'pending' && conn.requester_id === uid);
         const connLabel = !conn
           ? (prof.account_type === 'institution' ? 'Follow' : 'Add')
           : conn.status === 'accepted'
           ? 'Connected'
-          : conn.addressee_id === uid
+          : isIncomingPending
           ? 'Accept'
           : 'Requested';
 
@@ -3954,10 +4321,19 @@
                 ${prof.bio ? `<p class="text-xs text-zinc-300 leading-relaxed">${escapeAttr(prof.bio)}</p>` : ''}
               </div>
 
-              <div class="grid ${isConnected ? 'grid-cols-3' : 'grid-cols-2'} gap-2">
-                <button onclick="handleConnectionClick('${prof.id}')" class="h-8 rounded-lg ${isConnected ? 'bg-zinc-900 text-white' : 'bg-sky-500 text-white'} text-xs font-semibold">
-                  ${connLabel}
-                </button>
+              <div class="grid ${isConnected || isIncomingPending ? 'grid-cols-3' : 'grid-cols-2'} gap-2">
+                ${isIncomingPending ? `
+                  <button onclick="handleConnectionClick('${prof.id}', 'accept')" class="h-8 rounded-lg bg-sky-500 text-white text-xs font-semibold">
+                    Accept
+                  </button>
+                  <button onclick="handleConnectionClick('${prof.id}', 'decline')" class="h-8 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs font-semibold">
+                    Decline
+                  </button>
+                ` : `
+                  <button onclick="handleConnectionClick('${prof.id}')" class="h-8 rounded-lg ${isConnected || isOutgoingPending ? 'bg-zinc-900 border border-zinc-800 text-white' : 'bg-sky-500 text-white'} text-xs font-semibold">
+                    ${connLabel}
+                  </button>
+                `}
                 ${isConnected ? `
                   <button onclick="openChat('${prof.id}')" class="h-8 rounded-lg bg-zinc-900 text-xs font-semibold">
                     Message

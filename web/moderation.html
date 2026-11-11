@@ -240,7 +240,7 @@
       if (modState.token) {
         headers['Authorization'] = `Bearer ${modState.token}`;
       }
-      const res = await fetch(path, { ...options, headers });
+      const res = await fetch(path, { ...options, headers, credentials: 'omit' });
       const data = await res.json();
       return { ok: res.ok, status: res.status, data };
     }
@@ -278,7 +278,7 @@
       const password = document.getElementById('mod-login-pw').value.trim();
       const res = await modFetch('/api/signin', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, moderation_only: true }),
       });
       if (!res.ok || !res.data.token) {
         modState.error = res.data.error || 'Invalid credentials.';

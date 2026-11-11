@@ -50,7 +50,7 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_MOD_EMAIL = os.environ.get("IVRIS_MOD_EMAIL", "moderator@ivris.app")
 DEFAULT_MOD_HANDLE = os.environ.get("IVRIS_MOD_HANDLE", "moderator")
 DEFAULT_MOD_PASSWORD = os.environ.get("IVRIS_MOD_PASSWORD", "IvrisMod2026!")
-ADMIN_OWNER_HANDLES = {"moderator", "ayden", "awz", "zoscha"}
+ADMIN_OWNER_HANDLES = {"moderator"}
 
 
 def is_moderator_user(user: dict | None) -> bool:
@@ -1482,10 +1482,10 @@ def are_mutually_connected(conn, user_a: str, user_b: str) -> bool:
     row = conn.execute(
         """
         SELECT 1 FROM connections
-        WHERE (status = 'accepted' AND ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)))
-           OR (status = 'pending' AND requester_id = ? AND addressee_id = ?)
+        WHERE status = 'accepted'
+          AND ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?))
         """,
-        (user_a, user_b, user_b, user_a, user_a, user_b),
+        (user_a, user_b, user_b, user_a),
     ).fetchone()
     return row is not None
 
@@ -2071,20 +2071,29 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         }
                     )
 
+                moderation_only = bool(body.get("moderation_only", False))
+                if moderation_only and not is_moderator_user(dict(user)):
+                    return self.send_json(
+                        {"error": "Moderator account credentials required."}, 403
+                    )
+
                 token = create_session_token(user)
                 conn.execute(
                     "INSERT OR REPLACE INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
                     (token, user["id"], int(time.time())),
                 )
                 conn.commit()
-                cookie_val = f"ivris_session={token}; Max-Age=31536000; Path=/; SameSite=Lax; HttpOnly"
+                extra_hdrs = None
+                if not moderation_only and user["account_type"] != "moderator":
+                    cookie_val = f"ivris_session={token}; Max-Age=31536000; Path=/; SameSite=Lax; HttpOnly"
+                    extra_hdrs = {"Set-Cookie": cookie_val}
                 return self.send_json(
                     {
                         "token": token,
                         "account_type": user["account_type"],
                         "handle": user["handle"],
                     },
-                    extra_headers={"Set-Cookie": cookie_val},
+                    extra_headers=extra_hdrs,
                 )
 
             if parsed.path == "/api/signout":
@@ -2801,49 +2810,61 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({"ok": True})
 
             if parsed.path == "/api/connect":
-                target_id = body.get("target_id", "")
+                target_id = (body.get("target_id") or "").strip()
                 action = (body.get("action") or "").strip().lower()
+                if not target_id or target_id == uid:
+                    return self.send_json({"error": "Invalid target user"}, 400)
                 target = conn.execute(
                     "SELECT * FROM users WHERE id = ?", (target_id,)
                 ).fetchone()
                 if not target:
                     return self.send_json({"error": "User not found"}, 404)
 
-                existing = conn.execute(
+                existing_rows = conn.execute(
                     """
                     SELECT * FROM connections
                     WHERE (requester_id = ? AND addressee_id = ?)
                        OR (requester_id = ? AND addressee_id = ?)
                     """,
                     (uid, target_id, target_id, uid),
-                ).fetchone()
+                ).fetchall()
+                existing = existing_rows[0] if existing_rows else None
+                now_conn_ts = int(time.time())
 
-                if action == "remove" and existing:
-                    conn.execute("DELETE FROM connections WHERE id = ?", (existing["id"],))
-                    conn.execute(
-                        "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES ('connection', ?, ?)",
-                        (existing["id"], int(time.time())),
-                    )
+                def _delete_existing_conns():
+                    for r_conn in existing_rows:
+                        conn.execute("DELETE FROM connections WHERE id = ?", (r_conn["id"],))
+                        conn.execute(
+                            "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES ('connection', ?, ?)",
+                            (r_conn["id"], now_conn_ts),
+                        )
+
+                if action in ("remove", "cancel", "decline", "unfriend") and existing:
+                    _delete_existing_conns()
                 elif not existing:
-                    status = (
-                        "accepted"
-                        if target["account_type"] == "institution"
-                        else "pending"
-                    )
-                    conn.execute(
-                        """
-                        INSERT INTO connections (id, requester_id, addressee_id, status, created_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        ("con_" + secrets.token_hex(6), uid, target_id, status, int(time.time())),
-                    )
-                elif existing["status"] == "pending" and (
-                    existing["addressee_id"] == uid or action == "accept"
-                ):
-                    conn.execute(
-                        "UPDATE connections SET status = 'accepted' WHERE id = ?",
-                        (existing["id"],),
-                    )
+                    if action not in ("remove", "cancel", "decline", "unfriend"):
+                        status = (
+                            "accepted"
+                            if target["account_type"] == "institution"
+                            else "pending"
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO connections (id, requester_id, addressee_id, status, created_at)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            ("con_" + secrets.token_hex(6), uid, target_id, status, now_conn_ts),
+                        )
+                elif existing["status"] == "pending":
+                    if existing["addressee_id"] == uid and action not in ("decline", "remove", "cancel"):
+                        conn.execute(
+                            "UPDATE connections SET status = 'accepted' WHERE id = ?",
+                            (existing["id"],),
+                        )
+                    elif existing["requester_id"] == uid and action in ("cancel", "remove", ""):
+                        _delete_existing_conns()
+                elif existing["status"] == "accepted" and action in ("remove", "unfriend", ""):
+                    _delete_existing_conns()
                 conn.commit()
                 create_database_backup("connection_updated")
                 return self.send_json({"ok": True})
