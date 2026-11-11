@@ -702,10 +702,10 @@
         <h3 id="report-post-title" class="text-sm font-semibold">Report Content</h3>
         <button type="button" onclick="document.getElementById('report-post-dialog').close()" class="text-xs text-zinc-400 hover:text-white">Cancel</button>
       </div>
-      <p class="text-xs text-zinc-400">Why are you reporting this post? Nudity and explicit content are immediately deleted.</p>
+      <p class="text-xs text-zinc-400">Why are you reporting this post? Reports are reviewed by our moderation team.</p>
       <div class="space-y-2">
         <button type="button" onclick="submitPostReport('Nudity or explicit sexual content')" class="w-full p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-left text-xs font-semibold text-rose-400 hover:bg-rose-500/25">
-          Nudity or explicit content (Immediate deletion)
+          Nudity or explicit sexual content
         </button>
         <button type="button" onclick="submitPostReport('Harassment or bullying')" class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-left text-xs font-medium text-white hover:bg-zinc-800">
           Harassment or bullying
@@ -732,7 +732,7 @@
       </p>
       <div class="space-y-2">
         <button type="button" onclick="submitAccountReport('Inappropriate profile photo or nudity')" class="w-full p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-left text-xs font-semibold text-rose-400 hover:bg-rose-500/25">
-          Inappropriate profile photo or nudity (Immediate removal)
+          Inappropriate profile photo or nudity
         </button>
         <button type="button" onclick="submitAccountReport('Harassment, bullying, or threats')" class="w-full p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-left text-xs font-medium text-white hover:bg-zinc-800">
           Harassment, bullying, or threats
@@ -2721,11 +2721,7 @@
         document.getElementById('report-post-dialog').close();
         const storyDlg = document.getElementById('story-viewer-dialog');
         if (storyDlg?.open) storyDlg.close();
-        if (res.immediately_deleted) {
-          alert('Nudity report verified: Post and media files were immediately deleted.');
-        } else {
-          alert('Report submitted to Ivris Moderation.');
-        }
+        alert('Report submitted to Ivris Moderation.');
         await loadLiveData();
       } catch (err) {
         alert(err.message || 'Could not submit report');

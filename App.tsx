@@ -263,9 +263,7 @@ export default function App() {
       await refreshAllData();
       Alert.alert(
         'Report Submitted',
-        res?.auto_cleared_avatar
-          ? 'This account’s profile photo was immediately removed and logged for moderation.'
-          : 'Thank you for keeping Ivris safe. Our moderation team has received your report.'
+        'Thank you for keeping Ivris safe. Our moderation team has received your report.'
       );
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not submit report');
@@ -1580,7 +1578,7 @@ export default function App() {
           </View>
           <View style={{ gap: 10 }}>
             {[
-              'Inappropriate profile photo or nudity (Immediate removal)',
+              'Inappropriate profile photo or nudity',
               'Harassment, bullying, or threats',
               'Impersonation or fake account',
               'Underage user or teen safety concern',

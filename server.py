@@ -2174,38 +2174,6 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                                 (ec["id"], now_ts),
                             )
 
-                    immediately_cleared_avatar = False
-                    if "nudi" in reason.lower() or "explicit" in reason.lower() or "inappropriate profile photo" in reason.lower():
-                        old_av = target_u.get("avatar_url") or ""
-                        if old_av.startswith("/uploads/"):
-                            fname = old_av.replace("/uploads/", "", 1)
-                            fpath = (UPLOADS_DIR / fname).resolve()
-                            if str(fpath).startswith(str(UPLOADS_DIR.resolve())) and fpath.exists():
-                                try:
-                                    fpath.unlink(missing_ok=True)
-                                except Exception:
-                                    pass
-                            conn.execute("DELETE FROM media_blobs WHERE url = ?", (old_av,))
-                        conn.execute(
-                            "UPDATE users SET avatar_url = '', updated_at = ? WHERE id = ?",
-                            (now_ts, target_user_id),
-                        )
-                        conn.execute(
-                            """
-                            INSERT INTO moderation_logs (id, moderator_id, action, target_id, author_handle, reason, created_at)
-                            VALUES (?, ?, 'auto_cleared_avatar', ?, ?, ?, ?)
-                            """,
-                            (
-                                "log_" + secrets.token_hex(6),
-                                user["id"] if user else "system_auto_nudity_filter",
-                                target_user_id,
-                                target_u.get("handle") or "",
-                                f"Profile picture automatically removed from safety report: {reason}",
-                                now_ts,
-                            ),
-                        )
-                        immediately_cleared_avatar = True
-
                     report_id = "rep_" + secrets.token_hex(6)
                     conn.execute(
                         """
@@ -2229,12 +2197,8 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                             "ok": True,
                             "report_id": report_id,
                             "report_type": "account",
-                            "immediately_cleared_avatar": immediately_cleared_avatar,
                             "disconnected": block_user,
-                            "message": (
-                                f"Safety report submitted for @{target_u.get('handle')}. "
-                                + ("Offending profile photo was immediately removed." if immediately_cleared_avatar else "Ivris Trust & Safety will review this account.")
-                            ),
+                            "message": f"Safety report submitted for @{target_u.get('handle')}. Ivris Trust & Safety will review this account.",
                         }
                     )
 
@@ -2246,24 +2210,6 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 ).fetchone()
                 if not post_row:
                     return self.send_json({"error": "Post not found or already deleted."}, 404)
-
-                # If reported for nudity, immediately delete the post and its files
-                if "nudi" in reason.lower() or "explicit" in reason.lower():
-                    delete_post_immediately(
-                        conn,
-                        post_id,
-                        user["id"] if user else "system_auto_nudity_filter",
-                        "auto_deleted_nudity",
-                        f"Immediate deletion triggered by nudity report: {reason}",
-                    )
-                    conn.commit()
-                    return self.send_json(
-                        {
-                            "ok": True,
-                            "immediately_deleted": True,
-                            "message": "Nudity report verified: Post and media files were immediately deleted.",
-                        }
-                    )
 
                 report_id = "rep_" + secrets.token_hex(6)
                 conn.execute(
@@ -2283,7 +2229,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 )
                 conn.commit()
                 create_database_backup("post_reported")
-                return self.send_json({"ok": True, "report_id": report_id, "report_type": "post"})
+                return self.send_json({"ok": True, "report_id": report_id, "report_type": "post", "message": "Report submitted to Ivris Moderation."})
 
             # Authenticated endpoints below
             user = self.get_current_user(conn)
