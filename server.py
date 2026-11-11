@@ -12,6 +12,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -56,11 +57,18 @@ TOKEN_SIGNING_SECRET = os.environ.get(
 DEFAULT_SETTINGS = {
     "read_receipts": True,
     "story_replies": True,
-    "auto_hide_seen": True,
+    "auto_hide_seen": False,
     "quiet_mode": False,
     "notify_requests": True,
     "notify_messages": True,
 }
+
+CLOUD_VAULT_RAW_URL = os.environ.get(
+    "IVRIS_CLOUD_VAULT_URL",
+    "https://github.com/realAWZ/ivris/raw/ivris-data-vault/ivris_vault.db",
+)
+_vault_sync_lock = threading.Lock()
+_vault_sync_pending = False
 
 EXPLICIT_NUDITY_PATTERN = re.compile(
     r"\b(nude|nudes|nudity|naked|nsfw|porn|porno|pornography|xxx|onlyfans|topless|uncensored|sextape|sex\s*tape|explicit\s*nude)\b",
@@ -128,6 +136,12 @@ def verify_and_restore_session_token(conn, token: str):
     ).fetchone()
 
     if not user_row:
+        tomb = conn.execute(
+            "SELECT 1 FROM deleted_records WHERE record_type = 'user' AND record_id = ?",
+            (uid,),
+        ).fetchone()
+        if tomb:
+            return None
         conn.execute(
             """
             INSERT INTO users (id, email, password_hash, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
@@ -147,7 +161,9 @@ def verify_and_restore_session_token(conn, token: str):
                 int(payload.get("iat") or time.time()),
             ),
         )
+        conn.commit()
         user_row = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+        create_database_backup("session_restored")
 
     if user_row:
         conn.execute(
@@ -160,7 +176,7 @@ def verify_and_restore_session_token(conn, token: str):
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -280,6 +296,12 @@ def init_db():
             data BLOB NOT NULL,
             created_at INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS deleted_records (
+            record_type TEXT NOT NULL,
+            record_id TEXT PRIMARY KEY,
+            deleted_at INTEGER NOT NULL
+        );
         """
     )
     existing_user_cols = [
@@ -301,6 +323,19 @@ def init_db():
         cur.execute("ALTER TABLE posts ADD COLUMN media_urls_json TEXT DEFAULT '[]'")
     if "music_json" not in existing_post_cols:
         cur.execute("ALTER TABLE posts ADD COLUMN music_json TEXT DEFAULT ''")
+
+    # Migrate existing users to auto_hide_seen = False so feed posts stay visible like Instagram
+    for u_row in cur.execute("SELECT id, settings_json FROM users").fetchall():
+        try:
+            s_obj = json.loads(u_row["settings_json"] or "{}")
+            if s_obj.get("auto_hide_seen") is True:
+                s_obj["auto_hide_seen"] = False
+                cur.execute(
+                    "UPDATE users SET settings_json = ? WHERE id = ?",
+                    (json.dumps(s_obj), u_row["id"]),
+                )
+        except Exception:
+            pass
 
     # Backfill post_views from post_receipts
     cur.execute(
@@ -340,9 +375,45 @@ def init_db():
 
     conn.commit()
     conn.close()
+    backfill_disk_uploads_to_blobs()
 
 
-def create_database_backup(label: str = "auto") -> dict:
+def backfill_disk_uploads_to_blobs():
+    """Ensures every physical file in UPLOADS_DIR is stored in media_blobs inside SQLite."""
+    try:
+        if not UPLOADS_DIR.exists():
+            return
+        conn = get_db()
+        inserted = 0
+        for fpath in UPLOADS_DIR.iterdir():
+            if not fpath.is_file() or fpath.stat().st_size < 200:
+                continue
+            url = f"/uploads/{fpath.name}"
+            existing = conn.execute(
+                "SELECT length(data) AS l FROM media_blobs WHERE url = ?", (url,)
+            ).fetchone()
+            if not existing or existing["l"] < fpath.stat().st_size:
+                raw = fpath.read_bytes()
+                ext = fpath.suffix.lower()
+                mime = (
+                    "image/jpeg"
+                    if ext in (".jpg", ".jpeg")
+                    else ("video/mp4" if ext == ".mp4" else "image/png")
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO media_blobs (url, mime_type, data, created_at) VALUES (?, ?, ?, ?)",
+                    (url, mime, raw, int(fpath.stat().st_mtime)),
+                )
+                inserted += 1
+        if inserted > 0:
+            conn.commit()
+            print(f"[MEDIA RECOVERY] Backfilled {inserted} disk uploads into SQLite media_blobs.")
+        conn.close()
+    except Exception as e:
+        print(f"[MEDIA RECOVERY] Error backfilling disk uploads: {e}")
+
+
+def create_database_backup(label: str = "auto", sync_vault: bool = True) -> dict:
     """
     Creates an atomic, consistent SQLite snapshot of the live database using
     SQLite's online backup API without interrupting active transactions.
@@ -358,14 +429,14 @@ def create_database_backup(label: str = "auto") -> dict:
         if not DB_PATH.exists() or DB_PATH.stat().st_size == 0:
             return {"error": "Live database file does not exist yet."}
 
-        src = sqlite3.connect(DB_PATH)
-        dst = sqlite3.connect(dest_path)
+        src = sqlite3.connect(DB_PATH, timeout=30.0)
+        dst = sqlite3.connect(dest_path, timeout=30.0)
         with dst:
             src.backup(dst)
         dst.close()
 
         # Update latest pointer backup image
-        dst_latest = sqlite3.connect(latest_path)
+        dst_latest = sqlite3.connect(latest_path, timeout=30.0)
         with dst_latest:
             src.backup(dst_latest)
         dst_latest.close()
@@ -374,6 +445,8 @@ def create_database_backup(label: str = "auto") -> dict:
         prune_old_backups(keep=30)
         info = get_backup_file_info(dest_path)
         print(f"[BACKUP ENGINE] Snapshot created: {filename} ({info.get('size_human', '')})")
+        if sync_vault and label not in ("boot", "startup", "hourly", "pre_restore_safety"):
+            trigger_background_vault_sync()
         return info
     except Exception as e:
         print(f"[BACKUP ENGINE] Failed to create backup: {e}")
@@ -408,10 +481,12 @@ def get_backup_file_info(fpath: Path) -> dict:
     )
     users_count = 0
     posts_count = 0
+    connections_count = 0
     try:
-        c = sqlite3.connect(fpath)
+        c = sqlite3.connect(fpath, timeout=10.0)
         users_count = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         posts_count = c.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+        connections_count = c.execute("SELECT COUNT(*) FROM connections").fetchone()[0]
         c.close()
     except Exception:
         pass
@@ -426,6 +501,7 @@ def get_backup_file_info(fpath: Path) -> dict:
         ),
         "users_count": users_count,
         "posts_count": posts_count,
+        "connections_count": connections_count,
     }
 
 
@@ -449,19 +525,336 @@ def list_backups() -> list[dict]:
     return items
 
 
-def restore_database_from_file(backup_path: Path) -> tuple[bool, str]:
+def merge_databases(src_path: Path, dst_path: Path = DB_PATH) -> dict:
+    """
+    Additive Multi-Master SQLite Merge Engine:
+    Unions accounts (users), friend connections (connections), posts (posts),
+    media files (media_blobs), messages (direct_messages), and views/receipts
+    from src_path into dst_path while honoring intentional deletions in deleted_records.
+    Never wipes or loses rows created on either instance.
+    """
+    if not src_path.exists() or src_path.stat().st_size < 4096:
+        return {"ok": False, "error": "Source database missing or invalid"}
+
+    init_db()
+    conn = sqlite3.connect(dst_path, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        src_conn = sqlite3.connect(src_path, timeout=15.0)
+        src_conn.row_factory = sqlite3.Row
+        src_tables = {
+            r["name"]
+            for r in src_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+
+        # 1. Merge deleted_records tombstones first
+        if "deleted_records" in src_tables:
+            for r in src_conn.execute("SELECT * FROM deleted_records").fetchall():
+                conn.execute(
+                    "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES (?, ?, ?)",
+                    (r["record_type"], r["record_id"], r["deleted_at"]),
+                )
+
+        deleted_users = {
+            r["record_id"]
+            for r in conn.execute(
+                "SELECT record_id FROM deleted_records WHERE record_type = 'user'"
+            ).fetchall()
+        }
+        deleted_posts = {
+            r["record_id"]
+            for r in conn.execute(
+                "SELECT record_id FROM deleted_records WHERE record_type = 'post'"
+            ).fetchall()
+        }
+        deleted_conns = {
+            r["record_id"]
+            for r in conn.execute(
+                "SELECT record_id FROM deleted_records WHERE record_type = 'connection'"
+            ).fetchall()
+        }
+
+        # Apply tombstones to destination DB
+        for pid in deleted_posts:
+            conn.execute("DELETE FROM posts WHERE id = ?", (pid,))
+            conn.execute("DELETE FROM post_views WHERE post_id = ?", (pid,))
+            conn.execute("DELETE FROM post_receipts WHERE post_id = ?", (pid,))
+            conn.execute("DELETE FROM post_likes WHERE post_id = ?", (pid,))
+        for cid in deleted_conns:
+            conn.execute("DELETE FROM connections WHERE id = ?", (cid,))
+        for uid in deleted_users:
+            conn.execute("DELETE FROM users WHERE id = ? AND account_type != 'moderator'", (uid,))
+
+        # 2. Merge users additively
+        if "users" in src_tables:
+            src_user_cols = {
+                r["name"] for r in src_conn.execute("PRAGMA table_info(users)").fetchall()
+            }
+            for u in src_conn.execute("SELECT * FROM users").fetchall():
+                u_dict = dict(u)
+                uid = u_dict["id"]
+                if uid in deleted_users:
+                    continue
+                existing = conn.execute(
+                    "SELECT * FROM users WHERE id = ? OR email = ? OR handle = ?",
+                    (uid, u_dict["email"], u_dict["handle"]),
+                ).fetchone()
+                if not existing:
+                    settings_raw = u_dict.get("settings_json") or json.dumps(DEFAULT_SETTINGS)
+                    try:
+                        s_obj = json.loads(settings_raw)
+                        s_obj["auto_hide_seen"] = False
+                        settings_raw = json.dumps(s_obj)
+                    except Exception:
+                        settings_raw = json.dumps(DEFAULT_SETTINGS)
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO users
+                        (id, email, password_hash, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            uid,
+                            u_dict["email"],
+                            u_dict["password_hash"],
+                            u_dict["handle"],
+                            u_dict["display_name"],
+                            u_dict.get("bio") or "",
+                            u_dict.get("avatar_url") or "" if "avatar_url" in src_user_cols else "",
+                            u_dict.get("account_type") or "personal",
+                            int(u_dict.get("is_verified_institution") or 0),
+                            int(u_dict.get("email_confirmed", 1)),
+                            u_dict.get("verification_code") or "",
+                            settings_raw,
+                            int(u_dict.get("created_at") or time.time()),
+                        ),
+                    )
+                else:
+                    ex_dict = dict(existing)
+                    confirmed = max(
+                        int(ex_dict.get("email_confirmed") or 0),
+                        int(u_dict.get("email_confirmed") or 0),
+                    )
+                    verified_inst = max(
+                        int(ex_dict.get("is_verified_institution") or 0),
+                        int(u_dict.get("is_verified_institution") or 0),
+                    )
+                    avatar = ex_dict.get("avatar_url") or u_dict.get("avatar_url") or ""
+                    bio = ex_dict.get("bio") or u_dict.get("bio") or ""
+                    conn.execute(
+                        """
+                        UPDATE users
+                        SET email_confirmed = ?, is_verified_institution = ?, avatar_url = ?, bio = ?
+                        WHERE id = ?
+                        """,
+                        (confirmed, verified_inst, avatar, bio, ex_dict["id"]),
+                    )
+
+        # 3. Merge connections additively (promoting pending -> accepted if accepted on either side)
+        if "connections" in src_tables:
+            for c in src_conn.execute("SELECT * FROM connections").fetchall():
+                c_dict = dict(c)
+                if c_dict["id"] in deleted_conns:
+                    continue
+                req_id = c_dict["requester_id"]
+                add_id = c_dict["addressee_id"]
+                if req_id in deleted_users or add_id in deleted_users:
+                    continue
+                existing_c = conn.execute(
+                    """
+                    SELECT * FROM connections
+                    WHERE (requester_id = ? AND addressee_id = ?)
+                       OR (requester_id = ? AND addressee_id = ?)
+                    """,
+                    (req_id, add_id, add_id, req_id),
+                ).fetchone()
+                if not existing_c:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO connections (id, requester_id, addressee_id, status, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            c_dict["id"],
+                            req_id,
+                            add_id,
+                            c_dict["status"],
+                            int(c_dict.get("created_at") or time.time()),
+                        ),
+                    )
+                else:
+                    if c_dict["status"] == "accepted" and existing_c["status"] != "accepted":
+                        conn.execute(
+                            "UPDATE connections SET status = 'accepted' WHERE id = ?",
+                            (existing_c["id"],),
+                        )
+
+        # 4. Merge posts additively
+        if "posts" in src_tables:
+            for p in src_conn.execute("SELECT * FROM posts").fetchall():
+                p_dict = dict(p)
+                pid = p_dict["id"]
+                if pid in deleted_posts or p_dict["author_id"] in deleted_users:
+                    continue
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO posts
+                    (id, author_id, media_kind, media_url, media_urls_json, caption, location_label, music_json, expires_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        pid,
+                        p_dict["author_id"],
+                        p_dict["media_kind"],
+                        p_dict["media_url"],
+                        p_dict.get("media_urls_json") or json.dumps([p_dict["media_url"]]),
+                        p_dict.get("caption") or "",
+                        p_dict.get("location_label") or "",
+                        p_dict.get("music_json") or "",
+                        p_dict.get("expires_at"),
+                        int(p_dict.get("created_at") or time.time()),
+                    ),
+                )
+
+        # 5. Merge media_blobs additively
+        if "media_blobs" in src_tables:
+            for b in src_conn.execute("SELECT url, mime_type, data, created_at FROM media_blobs").fetchall():
+                if not b["data"] or len(b["data"]) < 200:
+                    continue
+                cur_b = conn.execute(
+                    "SELECT length(data) AS l FROM media_blobs WHERE url = ?",
+                    (b["url"],),
+                ).fetchone()
+                if not cur_b or cur_b["l"] < len(b["data"]):
+                    conn.execute(
+                        "INSERT OR REPLACE INTO media_blobs (url, mime_type, data, created_at) VALUES (?, ?, ?, ?)",
+                        (b["url"], b["mime_type"], b["data"], int(b["created_at"] or time.time())),
+                    )
+
+        # 6. Merge messages, views, receipts, likes, applications, reports, logs
+        if "direct_messages" in src_tables:
+            for m in src_conn.execute("SELECT * FROM direct_messages").fetchall():
+                conn.execute(
+                    "INSERT OR IGNORE INTO direct_messages (id, sender_id, recipient_id, message, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (m["id"], m["sender_id"], m["recipient_id"], m["message"], m["created_at"]),
+                )
+        if "post_views" in src_tables:
+            for pv in src_conn.execute("SELECT * FROM post_views").fetchall():
+                if pv["post_id"] not in deleted_posts:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO post_views (post_id, user_id, viewed_at) VALUES (?, ?, ?)",
+                        (pv["post_id"], pv["user_id"], pv["viewed_at"]),
+                    )
+        if "post_receipts" in src_tables:
+            for pr in src_conn.execute("SELECT * FROM post_receipts").fetchall():
+                if pr["post_id"] not in deleted_posts:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO post_receipts (user_id, post_id, seen_at) VALUES (?, ?, ?)",
+                        (pr["user_id"], pr["post_id"], pr["seen_at"]),
+                    )
+        if "institution_applications" in src_tables:
+            for ia in src_conn.execute("SELECT * FROM institution_applications").fetchall():
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO institution_applications
+                    (id, applicant_user_id, institution_name, official_domain, contact_email, notes, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ia["id"],
+                        ia["applicant_user_id"],
+                        ia["institution_name"],
+                        ia["official_domain"],
+                        ia["contact_email"],
+                        ia["notes"],
+                        ia["status"],
+                        ia["created_at"],
+                    ),
+                )
+        if "moderation_reports" in src_tables:
+            for mr in src_conn.execute("SELECT * FROM moderation_reports").fetchall():
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO moderation_reports
+                    (id, post_id, reporter_id, reason, details, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        mr["id"],
+                        mr["post_id"],
+                        mr["reporter_id"],
+                        mr["reason"],
+                        mr["details"],
+                        mr["status"],
+                        mr["created_at"],
+                    ),
+                )
+        if "moderation_logs" in src_tables:
+            for ml in src_conn.execute("SELECT * FROM moderation_logs").fetchall():
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO moderation_logs
+                    (id, moderator_id, action, target_id, author_handle, reason, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ml["id"],
+                        ml["moderator_id"],
+                        ml["action"],
+                        ml["target_id"],
+                        ml["author_handle"],
+                        ml["reason"],
+                        ml["created_at"],
+                    ),
+                )
+
+        src_conn.close()
+        conn.commit()
+        u_cnt = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        p_cnt = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+        c_cnt = conn.execute("SELECT COUNT(*) FROM connections").fetchone()[0]
+        b_cnt = conn.execute("SELECT COUNT(*) FROM media_blobs").fetchone()[0]
+        conn.close()
+        restore_media_blobs_to_disk()
+        return {
+            "ok": True,
+            "users_count": u_cnt,
+            "posts_count": p_cnt,
+            "connections_count": c_cnt,
+            "blobs_count": b_cnt,
+        }
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        print(f"[MERGE ENGINE] Error merging databases: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def restore_database_from_file(backup_path: Path, additive: bool = True) -> tuple[bool, str]:
     if not backup_path.exists():
         return False, f"Backup file {backup_path.name} not found."
     try:
-        test_conn = sqlite3.connect(backup_path)
-        users_count = test_conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        test_conn.close()
+        if DB_PATH.exists() and DB_PATH.stat().st_size > 4096 and additive:
+            res = merge_databases(backup_path, DB_PATH)
+            if res.get("ok"):
+                create_database_backup("post_merge_snapshot", sync_vault=False)
+                msg = (
+                    f"Database merged from {backup_path.name}: "
+                    f"{res.get('users_count')} accounts, {res.get('posts_count')} posts, "
+                    f"{res.get('connections_count')} connections."
+                )
+                print(f"[BACKUP ENGINE] {msg}")
+                return True, msg
 
         if DB_PATH.exists() and DB_PATH.stat().st_size > 0:
-            create_database_backup("pre_restore_safety")
+            create_database_backup("pre_restore_safety", sync_vault=False)
 
-        src = sqlite3.connect(backup_path)
-        dst = sqlite3.connect(DB_PATH)
+        src = sqlite3.connect(backup_path, timeout=30.0)
+        dst = sqlite3.connect(DB_PATH, timeout=30.0)
         with dst:
             src.backup(dst)
         dst.close()
@@ -469,7 +862,8 @@ def restore_database_from_file(backup_path: Path) -> tuple[bool, str]:
 
         init_db()
         restore_media_blobs_to_disk()
-        msg = f"Database restored from {backup_path.name} with {users_count} registered accounts."
+        info = get_backup_file_info(DB_PATH)
+        msg = f"Database restored from {backup_path.name} with {info.get('users_count', 0)} registered accounts."
         print(f"[BACKUP ENGINE] {msg}")
         return True, msg
     except Exception as e:
@@ -490,7 +884,7 @@ def restore_media_blobs_to_disk():
             if isinstance(url, str) and url.startswith("/uploads/"):
                 fname = url.replace("/uploads/", "", 1)
                 dest = UPLOADS_DIR / fname
-                if not dest.exists() and r["data"]:
+                if (not dest.exists() or dest.stat().st_size < len(r["data"])) and r["data"]:
                     dest.write_bytes(r["data"])
                     restored += 1
         if restored > 0:
@@ -499,20 +893,148 @@ def restore_media_blobs_to_disk():
         print(f"[MEDIA RECOVERY] Error restoring media blobs: {e}")
 
 
+def sync_from_cloud_vault() -> dict:
+    """
+    Pulls the latest persistent database image from the external Cloud Vault
+    (ivris-data-vault branch) and additively merges it into the live database.
+    Requires zero tokens on Render or local dev.
+    """
+    try:
+        vault_url = f"{CLOUD_VAULT_RAW_URL}?t={int(time.time())}"
+        req = urllib.request.Request(
+            vault_url,
+            headers={"User-Agent": "IvrisVaultSync/1.0", "Cache-Control": "no-cache"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            vault_bytes = resp.read()
+        if vault_bytes and len(vault_bytes) > 4096 and vault_bytes.startswith(b"SQLite format 3"):
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            vault_file = BACKUP_DIR / "ivris_cloud_vault.db"
+            vault_file.write_bytes(vault_bytes)
+            res = merge_databases(vault_file, DB_PATH)
+            if res.get("ok"):
+                print(
+                    f"[CLOUD VAULT] Merged cloud vault: {res.get('users_count')} users, "
+                    f"{res.get('posts_count')} posts, {res.get('connections_count')} connections."
+                )
+            return res
+    except Exception as e:
+        print(f"[CLOUD VAULT] Pull warning: {e}")
+        return {"ok": False, "error": str(e)}
+    return {"ok": False, "error": "Empty vault response"}
+
+
+def push_to_cloud_vault() -> bool:
+    """
+    When running in a Git-connected environment, publishes the latest merged SQLite
+    database to refs/heads/ivris-data-vault using git plumbing (never touches working tree
+    or main branch, so it never triggers Render redeploy loops).
+    """
+    git_dir = BASE_DIR / ".git"
+    if not git_dir.exists() or not DB_PATH.exists():
+        return False
+    try:
+        latest_snap = BACKUP_DIR / "ivris_latest.db"
+        target_db = latest_snap if latest_snap.exists() and latest_snap.stat().st_size > 4096 else DB_PATH
+        blob_sha = (
+            subprocess.check_output(
+                ["git", "hash-object", "-w", str(target_db)], cwd=str(BASE_DIR), timeout=15
+            )
+            .decode()
+            .strip()
+        )
+        tree_input = f"100644 blob {blob_sha}\tivris_vault.db\n".encode("utf-8")
+        tree_sha = (
+            subprocess.check_output(
+                ["git", "mktree"], input=tree_input, cwd=str(BASE_DIR), timeout=15
+            )
+            .decode()
+            .strip()
+        )
+        commit_sha = (
+            subprocess.check_output(
+                ["git", "commit-tree", tree_sha, "-m", f"Ivris vault sync {int(time.time())}"],
+                cwd=str(BASE_DIR),
+                timeout=15,
+            )
+            .decode()
+            .strip()
+        )
+        subprocess.check_call(
+            ["git", "push", "--force", "origin", f"{commit_sha}:refs/heads/ivris-data-vault"],
+            cwd=str(BASE_DIR),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=25,
+        )
+        print(f"[CLOUD VAULT] Published latest snapshot to ivris-data-vault ({commit_sha[:8]})")
+        return True
+    except Exception as e:
+        print(f"[CLOUD VAULT] Push skipped/failed: {e}")
+        return False
+
+
+def trigger_background_vault_sync():
+    global _vault_sync_pending
+    if _vault_sync_pending:
+        return
+    _vault_sync_pending = True
+
+    def _worker():
+        global _vault_sync_pending
+        time.sleep(1.5)
+        with _vault_sync_lock:
+            _vault_sync_pending = False
+            try:
+                if not os.environ.get("RENDER"):
+                    sync_with_upstream(force=False)
+                push_to_cloud_vault()
+            except Exception as e:
+                print(f"[CLOUD VAULT] Background sync error: {e}")
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def get_db_state_signature(db_file: Path) -> tuple:
+    try:
+        c = sqlite3.connect(db_file, timeout=10.0)
+        u = sorted([r[0] for r in c.execute("SELECT id FROM users").fetchall()])
+        p = sorted([r[0] for r in c.execute("SELECT id FROM posts").fetchall()])
+        cn = sorted(
+            [f"{r[0]}:{r[1]}" for r in c.execute("SELECT id, status FROM connections").fetchall()]
+        )
+        b = sorted(
+            [f"{r[0]}:{len(r[1])}" for r in c.execute("SELECT url, data FROM media_blobs").fetchall()]
+        )
+        dm = c.execute("SELECT COUNT(*) FROM direct_messages").fetchone()[0]
+        c.close()
+        return (tuple(u), tuple(p), tuple(cn), tuple(b), dm)
+    except Exception:
+        return ()
+
+
 def sync_with_upstream(force: bool = False) -> dict:
     """
-    Downloads latest database snapshot from live cloud server (https://ivris.onrender.com)
-    and synchronizes accounts and posts so local dev and remote stay in lockstep.
+    Bidirectionally synchronizes accounts, connections, posts, and media blobs
+    between local database, live cloud server (https://ivris.onrender.com),
+    and the persistent ivris-data-vault branch using additive multi-master merging.
     """
     upstream_url = os.environ.get("UPSTREAM_SYNC_URL", "https://ivris.onrender.com").rstrip("/")
     if os.environ.get("RENDER") and "onrender.com" in upstream_url:
-        return {"ok": False, "reason": "Already running on upstream production server."}
+        return sync_from_cloud_vault()
 
     try:
         login_url = f"{upstream_url}/api/signin"
-        req_data = json.dumps({"email": DEFAULT_MOD_EMAIL, "password": DEFAULT_MOD_PASSWORD}).encode("utf-8")
-        req = urllib.request.Request(login_url, data=req_data, headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        req_data = json.dumps(
+            {"email": DEFAULT_MOD_EMAIL, "password": DEFAULT_MOD_PASSWORD}
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            login_url,
+            data=req_data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             token = data.get("token")
 
@@ -520,32 +1042,61 @@ def sync_with_upstream(force: bool = False) -> dict:
             return {"ok": False, "reason": "Could not authenticate with upstream cloud server."}
 
         dl_url = f"{upstream_url}/api/admin/backup/download"
-        dl_req = urllib.request.Request(dl_url, headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(dl_req, timeout=15) as resp:
+        dl_req = urllib.request.Request(
+            dl_url, headers={"Authorization": f"Bearer {token}"}
+        )
+        with urllib.request.urlopen(dl_req, timeout=20) as resp:
             remote_bytes = resp.read()
 
-        if remote_bytes and len(remote_bytes) > 5000 and remote_bytes.startswith(b"SQLite format 3"):
+        if remote_bytes and len(remote_bytes) > 4096 and remote_bytes.startswith(b"SQLite format 3"):
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
             temp_file = BACKUP_DIR / "ivris_upstream_sync.db"
             temp_file.write_bytes(remote_bytes)
-            
-            r_conn = sqlite3.connect(temp_file)
-            r_users = r_conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            r_posts = r_conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-            r_conn.close()
 
-            l_conn = get_db()
-            l_users = l_conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            l_posts = l_conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-            l_conn.close()
+            remote_sig_before = get_db_state_signature(temp_file)
+            local_sig_before = get_db_state_signature(DB_PATH)
 
-            if force or (r_users >= l_users and r_posts >= l_posts):
-                restore_database_from_file(temp_file)
-                restore_media_blobs_to_disk()
-                msg = f"Successfully synchronized with {upstream_url} (Users: {r_users}, Posts: {r_posts})"
-                print(f"[SYNC ENGINE] {msg}")
-                return {"ok": True, "message": msg, "users": r_users, "posts": r_posts}
-            else:
-                return {"ok": True, "message": f"Local database already has {l_users} users and {l_posts} posts."}
+            # 1. Merge remote into local additively
+            merge_res = merge_databases(temp_file, DB_PATH)
+            local_sig_after = get_db_state_signature(DB_PATH)
+
+            # 2. If local gained anything from remote, snapshot & update cloud vault
+            if local_sig_after != local_sig_before:
+                create_database_backup("upstream_merged", sync_vault=False)
+                push_to_cloud_vault()
+
+            # 3. If merged local DB has records/blobs that remote was missing (or tombstones), push merged DB to remote!
+            if force or local_sig_after != remote_sig_before:
+                b64_db = base64.b64encode(DB_PATH.read_bytes()).decode("ascii")
+                push_req = urllib.request.Request(
+                    f"{upstream_url}/api/admin/backup/restore",
+                    data=json.dumps({"backup_base64": b64_db}).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {token}",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(push_req, timeout=30) as push_resp:
+                    push_resp.read()
+                push_to_cloud_vault()
+                print(
+                    f"[SYNC ENGINE] Pushed unified database to {upstream_url} "
+                    f"(Users: {merge_res.get('users_count')}, Posts: {merge_res.get('posts_count')}, "
+                    f"Connections: {merge_res.get('connections_count')})"
+                )
+
+            return {
+                "ok": True,
+                "message": (
+                    f"Synchronized with {upstream_url} "
+                    f"(Users: {merge_res.get('users_count')}, Posts: {merge_res.get('posts_count')}, "
+                    f"Connections: {merge_res.get('connections_count')})"
+                ),
+                "users": merge_res.get("users_count"),
+                "posts": merge_res.get("posts_count"),
+                "connections": merge_res.get("connections_count"),
+            }
     except Exception as e:
         print(f"[SYNC ENGINE] Upstream sync error: {e}")
         return {"ok": False, "reason": str(e)}
@@ -555,54 +1106,51 @@ def sync_with_upstream(force: bool = False) -> dict:
 
 def auto_restore_if_needed():
     """
-    On container startup, checks if the live database is missing or empty.
-    If so, immediately restores from the latest persistent snapshot.
+    On container startup, merges the latest persistent snapshot and external Cloud Vault
+    so container restarts or code deploys never lose accounts, connections, or posts.
     """
     try:
-        should_restore = False
-        if not DB_PATH.exists() or DB_PATH.stat().st_size == 0:
-            should_restore = True
-        else:
-            try:
-                conn = sqlite3.connect(DB_PATH)
-                u_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-                conn.close()
-                if u_count == 0:
-                    should_restore = True
-            except Exception:
-                should_restore = True
-
-        if should_restore:
-            latest = BACKUP_DIR / "ivris_latest.db"
-            if latest.exists() and latest.stat().st_size > 0:
-                print(f"[BACKUP ENGINE] Database empty/missing. Auto-restoring from {latest.name}...")
-                restore_database_from_file(latest)
-            else:
-                backups = [
-                    f for f in BACKUP_DIR.glob("ivris_backup_*.db") if f.is_file()
-                ]
-                if backups:
-                    backups.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                    print(f"[BACKUP ENGINE] Auto-restoring from newest snapshot {backups[0].name}...")
-                    restore_database_from_file(backups[0])
+        init_db()
+        latest = BACKUP_DIR / "ivris_latest.db"
+        if latest.exists() and latest.stat().st_size > 4096:
+            merge_databases(latest, DB_PATH)
+        sync_from_cloud_vault()
     except Exception as e:
         print(f"[BACKUP ENGINE] Auto-restore error: {e}")
 
 
 def start_backup_scheduler():
     def _run():
-        time.sleep(20)
+        time.sleep(10)
         try:
-            create_database_backup("startup")
+            create_database_backup("startup", sync_vault=False)
         except Exception as e:
             print(f"[BACKUP SCHEDULER] Startup backup failed: {e}")
 
+        tick = 0
         while True:
-            time.sleep(3600)  # Hourly automated snapshot
+            time.sleep(25)
+            tick += 1
             try:
-                create_database_backup("hourly")
+                if os.environ.get("RENDER"):
+                    # Keep Render free-tier container warm so it never spins down after 15m idle
+                    if tick % 8 == 0:
+                        try:
+                            ext_url = os.environ.get(
+                                "RENDER_EXTERNAL_URL", "https://ivris.onrender.com"
+                            ).rstrip("/")
+                            urllib.request.urlopen(f"{ext_url}/api/health", timeout=10).read()
+                        except Exception:
+                            pass
+                        sync_from_cloud_vault()
+                else:
+                    # Local daemon: continuously keep Render awake and bidirectionally merge changes
+                    sync_with_upstream(force=False)
+
+                if tick % 144 == 0:  # Hourly local snapshot
+                    create_database_backup("hourly", sync_vault=False)
             except Exception as e:
-                print(f"[BACKUP SCHEDULER] Hourly backup failed: {e}")
+                print(f"[BACKUP SCHEDULER] Periodic sync warning: {e}")
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -687,6 +1235,10 @@ def delete_post_immediately(
     conn.execute("DELETE FROM post_receipts WHERE post_id = ?", (post_id,))
     conn.execute("DELETE FROM post_views WHERE post_id = ?", (post_id,))
     conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+    conn.execute(
+        "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES ('post', ?, ?)",
+        (post_id, int(time.time())),
+    )
     conn.execute(
         "UPDATE moderation_reports SET status = 'taken_down' WHERE post_id = ?",
         (post_id,),
@@ -830,10 +1382,10 @@ def are_mutually_connected(conn, user_a: str, user_b: str) -> bool:
     row = conn.execute(
         """
         SELECT 1 FROM connections
-        WHERE status = 'accepted'
-          AND ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?))
+        WHERE (status = 'accepted' AND ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)))
+           OR (status = 'pending' AND requester_id = ? AND addressee_id = ?)
         """,
-        (user_a, user_b, user_b, user_a),
+        (user_a, user_b, user_b, user_a, user_a, user_b),
     ).fetchone()
     return row is not None
 
@@ -898,6 +1450,17 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+
+        if parsed.path == "/api/health":
+            info = get_backup_file_info(DB_PATH)
+            return self.send_json({
+                "ok": True,
+                "status": "healthy",
+                "users_count": info.get("users_count", 0),
+                "posts_count": info.get("posts_count", 0),
+                "connections_count": info.get("connections_count", 0),
+                "timestamp": int(time.time()),
+            })
 
         if parsed.path.startswith("/uploads/"):
             fname = parsed.path.replace("/uploads/", "", 1)
@@ -1619,8 +2182,13 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     user_posts = conn.execute(
                         "SELECT * FROM posts WHERE author_id = ?", (target_uid,)
                     ).fetchall()
+                    now_del_ts = int(time.time())
                     for up in user_posts:
                         unlink_post_files(dict(up))
+                        conn.execute(
+                            "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES ('post', ?, ?)",
+                            (up["id"], now_del_ts),
+                        )
 
                     conn.execute("DELETE FROM post_likes WHERE user_id = ?", (target_uid,))
                     conn.execute("DELETE FROM post_receipts WHERE user_id = ?", (target_uid,))
@@ -1637,6 +2205,10 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_uid,))
                     conn.execute("DELETE FROM users WHERE id = ?", (target_uid,))
                     conn.execute(
+                        "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES ('user', ?, ?)",
+                        (target_uid, now_del_ts),
+                    )
+                    conn.execute(
                         """
                         INSERT INTO moderation_logs (id, moderator_id, action, target_id, author_handle, reason, created_at)
                         VALUES (?, ?, 'remove_account', ?, ?, ?, ?)
@@ -1647,10 +2219,11 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                             target_uid,
                             target_user["handle"],
                             reason,
-                            int(time.time()),
+                            now_del_ts,
                         ),
                     )
                     conn.commit()
+                    create_database_backup("user_moderated")
                     return self.send_json({"ok": True})
 
             if parsed.path == "/api/update-profile":
@@ -1701,6 +2274,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     (display_name, handle, bio, new_avatar_url, uid),
                 )
                 conn.commit()
+                create_database_backup("profile_updated")
                 return self.send_json({"ok": True, "avatar_url": new_avatar_url})
 
             if parsed.path == "/api/delete-post":
@@ -1710,11 +2284,22 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 ).fetchone()
                 if not post_row:
                     return self.send_json({"error": "Post not found."}, 404)
-                unlink_post_files(dict(post_row))
+                post_dict = dict(post_row)
+                unlink_post_files(post_dict)
+                conn.execute("DELETE FROM media_blobs WHERE url = ?", (post_dict.get("media_url"),))
+                try:
+                    for u_item in json.loads(post_dict.get("media_urls_json") or "[]"):
+                        conn.execute("DELETE FROM media_blobs WHERE url = ?", (u_item,))
+                except Exception:
+                    pass
                 conn.execute("DELETE FROM post_likes WHERE post_id = ?", (post_id,))
                 conn.execute("DELETE FROM post_receipts WHERE post_id = ?", (post_id,))
                 conn.execute("DELETE FROM post_views WHERE post_id = ?", (post_id,))
                 conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+                conn.execute(
+                    "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES ('post', ?, ?)",
+                    (post_id, int(time.time())),
+                )
                 conn.commit()
                 create_database_backup("post_deleted")
                 return self.send_json({"ok": True})
@@ -1733,6 +2318,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     (hash_pw(new_pw), uid),
                 )
                 conn.commit()
+                create_database_backup("password_changed")
                 return self.send_json({"ok": True})
 
             if parsed.path == "/api/update-settings":
@@ -1740,20 +2326,27 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     current_settings = json.loads(user.get("settings_json") or "{}")
                 except Exception:
                     current_settings = {}
-                updated = {**DEFAULT_SETTINGS, **current_settings, **(body.get("settings") or {})}
+                incoming_settings = body.get("settings") if isinstance(body.get("settings"), dict) else body
+                updated = {**DEFAULT_SETTINGS, **current_settings, **(incoming_settings or {})}
                 conn.execute(
                     "UPDATE users SET settings_json = ? WHERE id = ?",
                     (json.dumps(updated), uid),
                 )
                 conn.commit()
+                create_database_backup("settings_updated")
                 return self.send_json({"ok": True, "settings": updated})
 
             if parsed.path == "/api/delete-account":
+                now_del_ts = int(time.time())
                 user_posts = conn.execute(
                     "SELECT * FROM posts WHERE author_id = ?", (uid,)
                 ).fetchall()
                 for up in user_posts:
                     unlink_post_files(dict(up))
+                    conn.execute(
+                        "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES ('post', ?, ?)",
+                        (up["id"], now_del_ts),
+                    )
                 conn.execute("DELETE FROM post_likes WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM post_receipts WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM post_views WHERE user_id = ?", (uid,))
@@ -1768,6 +2361,10 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 conn.execute("DELETE FROM posts WHERE author_id = ?", (uid,))
                 conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM users WHERE id = ?", (uid,))
+                conn.execute(
+                    "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES ('user', ?, ?)",
+                    (uid, now_del_ts),
+                )
                 conn.commit()
                 create_database_backup("account_deleted")
                 return self.send_json({"ok": True})
@@ -1901,6 +2498,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
 
             if parsed.path == "/api/connect":
                 target_id = body.get("target_id", "")
+                action = (body.get("action") or "").strip().lower()
                 target = conn.execute(
                     "SELECT * FROM users WHERE id = ?", (target_id,)
                 ).fetchone()
@@ -1916,7 +2514,13 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     (uid, target_id, target_id, uid),
                 ).fetchone()
 
-                if not existing:
+                if action == "remove" and existing:
+                    conn.execute("DELETE FROM connections WHERE id = ?", (existing["id"],))
+                    conn.execute(
+                        "INSERT OR REPLACE INTO deleted_records (record_type, record_id, deleted_at) VALUES ('connection', ?, ?)",
+                        (existing["id"], int(time.time())),
+                    )
+                elif not existing:
                     status = (
                         "accepted"
                         if target["account_type"] == "institution"
@@ -1929,12 +2533,15 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         """,
                         ("con_" + secrets.token_hex(6), uid, target_id, status, int(time.time())),
                     )
-                elif existing["status"] == "pending" and existing["addressee_id"] == uid:
+                elif existing["status"] == "pending" and (
+                    existing["addressee_id"] == uid or action == "accept"
+                ):
                     conn.execute(
                         "UPDATE connections SET status = 'accepted' WHERE id = ?",
                         (existing["id"],),
                     )
                 conn.commit()
+                create_database_backup("connection_updated")
                 return self.send_json({"ok": True})
 
             if parsed.path == "/api/messages":
@@ -1955,6 +2562,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         ),
                     )
                     conn.commit()
+                    create_database_backup("message_sent")
                 return self.send_json({"ok": True})
 
             return self.send_json({"error": "Not found"}, 404)

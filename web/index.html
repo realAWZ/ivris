@@ -620,16 +620,42 @@
       }
     }
 
+    function readCachedState() {
+      try {
+        const raw = localStorage.getItem('ivris_cached_state');
+        return raw ? JSON.parse(raw) : {};
+      } catch (_e) {
+        return {};
+      }
+    }
+
+    function persistCachedState(data) {
+      try {
+        localStorage.setItem('ivris_cached_state', JSON.stringify({
+          connections: data.connections || [],
+          seenPostIds: data.seenPostIds || [],
+          viewedPostIds: data.viewedPostIds || [],
+          feedPosts: data.feedPosts || [],
+          myPosts: data.myPosts || [],
+          myStories: data.myStories || [],
+          stories: data.stories || [],
+          allProfiles: data.allProfiles || [],
+        }));
+      } catch (_e) {}
+    }
+
     function clearAuthSession() {
       appState.token = '';
       appState.user = null;
       try {
         localStorage.removeItem('ivris_token');
         localStorage.removeItem('ivris_cached_user');
+        localStorage.removeItem('ivris_cached_state');
       } catch (_e) {}
       document.cookie = 'ivris_client_token=; max-age=0; path=/; SameSite=Lax';
     }
 
+    const _initialCached = readCachedState();
     const appState = {
       token: readStoredToken(),
       user: readCachedUser(),
@@ -646,14 +672,14 @@
       searchTab: 'accounts', // 'accounts' | 'institutions' | 'requests'
       searchQuery: '',
       composeKind: 'photo_post',
-      feedPosts: [],
-      myPosts: [],
-      myStories: [],
-      stories: [],
-      seenPostIds: [],
-      viewedPostIds: [],
-      allProfiles: [],
-      connections: [],
+      feedPosts: _initialCached.feedPosts || [],
+      myPosts: _initialCached.myPosts || [],
+      myStories: _initialCached.myStories || [],
+      stories: _initialCached.stories || [],
+      seenPostIds: _initialCached.seenPostIds || [],
+      viewedPostIds: _initialCached.viewedPostIds || [],
+      allProfiles: _initialCached.allProfiles || [],
+      connections: _initialCached.connections || [],
       messages: [],
       carouselIndexes: {},
       activeChatPartner: null,
@@ -733,6 +759,7 @@
           return;
         }
         persistAuthSession(data.token || appState.token, data.user);
+        persistCachedState(data);
         appState.connections = data.connections || [];
         appState.seenPostIds = data.seenPostIds || [];
         appState.viewedPostIds = data.viewedPostIds || [];
@@ -2756,7 +2783,7 @@
       let bodyHtml = '';
 
       if (appState.screen === 'main') {
-        const autoHideSeen = appState.user.settings?.auto_hide_seen !== false;
+        const autoHideSeen = Boolean(appState.user.settings?.auto_hide_seen);
         const unseen = autoHideSeen
           ? appState.feedPosts.filter(p => !appState.seenPostIds.includes(p.id))
           : appState.feedPosts;
@@ -3128,7 +3155,7 @@
                       <span class="text-xs text-zinc-400 block">Remove posts from Home once marked Done</span>
                     </div>
                   </div>
-                  <input type="checkbox" switch class="ivris-switch" ${s.auto_hide_seen !== false ? 'checked' : ''} onchange="handleToggleSetting('auto_hide_seen', this.checked)" />
+                  <input type="checkbox" switch class="ivris-switch" ${s.auto_hide_seen ? 'checked' : ''} onchange="handleToggleSetting('auto_hide_seen', this.checked)" />
                 </label>
               </div>
             </div>
@@ -3285,7 +3312,7 @@
           (c.requester_id === uid && c.addressee_id === prof.id) ||
           (c.requester_id === prof.id && c.addressee_id === uid)
         );
-        const isConnected = (conn && conn.status === 'accepted') || Boolean(prof.is_verified_institution);
+        const isConnected = Boolean(conn && (conn.status === 'accepted' || conn.requester_id === uid)) || Boolean(prof.is_verified_institution);
         const connLabel = !conn
           ? (prof.account_type === 'institution' ? 'Follow' : 'Add')
           : conn.status === 'accepted'
@@ -3529,6 +3556,7 @@
           c: (data.connections || []).map(c => c.id + ':' + c.status),
         });
         persistAuthSession(data.token || appState.token, data.user);
+        persistCachedState(data);
         appState.connections = data.connections || [];
         appState.seenPostIds = data.seenPostIds || [];
         appState.feedPosts = data.feedPosts || [];

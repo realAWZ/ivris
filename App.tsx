@@ -157,7 +157,7 @@ export default function App() {
   const [settings, setSettings] = useState<UserSettings>({
     read_receipts: true,
     story_replies: true,
-    auto_hide_seen: true,
+    auto_hide_seen: false,
     quiet_mode: false,
     notify_requests: true,
     notify_messages: true,
