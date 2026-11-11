@@ -266,6 +266,18 @@
         min-inline-size: 64px;
       }
     }
+    @keyframes musicWavePulse {
+      0%, 100% { transform: scaleY(0.4); opacity: 0.7; }
+      50% { transform: scaleY(1.15); opacity: 1; }
+    }
+    .music-bar-active {
+      background-color: #38bdf8 !important;
+      box-shadow: 0 0 6px rgba(56, 189, 248, 0.75);
+    }
+    .music-bar-dancing {
+      animation: musicWavePulse 0.8s ease-in-out infinite alternate;
+      transform-origin: bottom;
+    }
   </style>
 </head>
 <body class="bg-black text-white antialiased min-h-[100dvh] flex justify-center">
@@ -351,99 +363,140 @@
   </dialog>
 
   <!-- Instagram-Style Music Picker & Trimmer Modal -->
-  <dialog id="music-picker-dialog" closedby="any" aria-labelledby="music-picker-title" onclose="handleMusicPickerClose()" class="w-full max-w-sm rounded-2xl bg-zinc-950 text-white border border-zinc-800 p-0 shadow-2xl overflow-hidden">
-    <!-- View 1: Search & Browse Songs -->
-    <div id="music-search-view" class="p-4 space-y-3">
-      <div class="flex items-center justify-between pb-2 border-b border-zinc-800/80">
-        <h3 id="music-picker-title" class="text-sm font-semibold">Music</h3>
-        <button type="button" onclick="document.getElementById('music-picker-dialog').close()" class="text-xs text-zinc-400 hover:text-white font-medium">
-          Cancel
-        </button>
-      </div>
-
-      <!-- Search Input -->
-      <div class="relative">
-        <svg class="w-4 h-4 text-zinc-400 absolute left-3 top-2.5 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-        <input
-          id="music-search-input"
-          type="text"
-          placeholder="Search music..."
-          oninput="handleMusicSearchInput(this.value)"
-          class="w-full pl-9 pr-7 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-600"
-        />
-        <button type="button" id="music-search-clear-btn" onclick="clearMusicSearch()" class="hidden absolute right-2.5 top-2.5 text-zinc-400 hover:text-white text-xs">✕</button>
-      </div>
-
-      <!-- Quick Genre Chips -->
-      <div class="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
-        <button type="button" onclick="searchMusicCategory('Trending', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-800 text-white hover:bg-zinc-700 whitespace-nowrap">Trending</button>
-        <button type="button" onclick="searchMusicCategory('Top Hits', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Top Hits</button>
-        <button type="button" onclick="searchMusicCategory('Hip-Hop', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Hip-Hop</button>
-        <button type="button" onclick="searchMusicCategory('Pop', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Pop</button>
-        <button type="button" onclick="searchMusicCategory('R&B', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">R&B</button>
-        <button type="button" onclick="searchMusicCategory('Indie', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Indie</button>
-      </div>
-
-      <!-- Songs List -->
-      <div id="music-results-list" class="max-h-[300px] overflow-y-auto divide-y divide-zinc-900 no-scrollbar">
-        <p class="py-8 text-center text-xs text-zinc-400">Loading songs...</p>
-      </div>
-    </div>
-
-    <!-- View 2: Instagram-Style Music Scrubber & Trimmer -->
-    <div id="music-trimmer-view" class="hidden p-4 space-y-4">
-      <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-        <button type="button" onclick="switchMusicPickerView('search')" class="flex items-center gap-1 text-xs text-zinc-400 hover:text-white">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
-          Back
-        </button>
-        <span class="text-xs font-semibold text-zinc-200">Adjust Audio Snippet</span>
-        <button type="button" onclick="confirmSelectedMusicSnippet()" class="text-xs font-semibold text-sky-400 hover:text-sky-300">
-          Done
-        </button>
-      </div>
-
-      <!-- Selected Track Banner -->
-      <div class="flex items-center gap-3 p-3 rounded-xl bg-zinc-900 border border-zinc-800/80">
-        <img id="trimmer-track-art" src="" alt="Album Art" class="w-12 h-12 rounded-lg object-cover bg-zinc-800 shrink-0 border border-zinc-800" />
-        <div class="min-w-0 flex-1">
-          <h4 id="trimmer-track-title" class="text-xs font-bold text-white truncate"></h4>
-          <p id="trimmer-track-artist" class="text-xs text-zinc-400 truncate"></p>
-        </div>
-        <button type="button" id="trimmer-play-btn" onclick="toggleTrimmerPreviewAudio()" aria-label="Toggle preview" class="w-9 h-9 rounded-full bg-white text-black flex items-center justify-center shrink-0 text-xs font-bold shadow hover:bg-zinc-200">
-          ▶
-        </button>
-      </div>
-
-      <!-- Instagram Waveform & Timeline Scrubber -->
-      <div class="space-y-3 pt-1">
-        <div class="flex items-center justify-between text-xs">
-          <span class="text-zinc-400">Starts at</span>
-          <span id="trimmer-time-display" class="font-bold text-sky-400 text-sm">0:00</span>
+  <dialog id="music-picker-dialog" closedby="any" aria-labelledby="music-picker-title" onclose="handleMusicPickerClose()" class="w-full max-w-sm rounded-3xl bg-zinc-950 text-white border border-zinc-800/80 p-0 shadow-2xl overflow-hidden backdrop-blur-2xl">
+    <div id="music-picker-carousel" class="flex w-[200%] transition-transform duration-300 ease-out will-change-transform" style="transform: translateX(0%);">
+      <!-- View 1: Search & Browse Songs (width 50%) -->
+      <div id="music-search-view" class="w-1/2 shrink-0 p-4 space-y-3 box-border">
+        <div class="flex items-center justify-between pb-2 border-b border-zinc-800/80">
+          <h3 id="music-picker-title" class="text-sm font-semibold tracking-tight">Music</h3>
+          <button type="button" onclick="document.getElementById('music-picker-dialog').close()" class="text-xs text-zinc-400 hover:text-white font-medium">
+            Cancel
+          </button>
         </div>
 
-        <!-- Waveform Visualization (Instagram Sound Bars) -->
-        <div class="relative w-full h-14 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-between px-3 overflow-hidden select-none">
-          <div id="trimmer-waveform-bars" class="w-full h-full flex items-center justify-between gap-[2px] pointer-events-none py-2"></div>
-          <div id="trimmer-scrubber-window" class="absolute top-0 bottom-0 pointer-events-none border-2 border-sky-400 bg-sky-500/20 rounded-md transition-all duration-75" style="left: 0%; width: 25%;"></div>
-        </div>
-
-        <!-- Slider ranging from 0 to 29 seconds -->
-        <div class="space-y-1">
+        <!-- Search Input -->
+        <div class="relative">
+          <svg class="w-4 h-4 text-zinc-400 absolute left-3 top-2.5 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
           <input
-            id="trimmer-slider"
-            type="range"
-            min="0"
-            max="29"
-            step="1"
-            value="0"
-            oninput="handleTrimmerSliderInput(this.value)"
-            class="w-full accent-sky-500 cursor-pointer h-2 bg-zinc-800 rounded-lg appearance-none"
+            id="music-search-input"
+            type="text"
+            placeholder="Search songs or artists..."
+            oninput="handleMusicSearchInput(this.value)"
+            class="w-full pl-9 pr-7 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-sky-500/60"
           />
-          <div class="flex justify-between text-[10px] text-zinc-500 font-mono">
-            <span>0:00 (Start)</span>
-            <span>0:15</span>
-            <span>0:29 (End)</span>
+          <button type="button" id="music-search-clear-btn" onclick="clearMusicSearch()" class="hidden absolute right-2.5 top-2.5 text-zinc-400 hover:text-white text-xs">✕</button>
+        </div>
+
+        <!-- Custom Audio Upload Button -->
+        <div class="pt-0.5">
+          <button type="button" onclick="document.getElementById('custom-audio-file-input').click()" class="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-sky-500/10 to-indigo-500/10 hover:from-sky-500/20 hover:to-indigo-500/20 border border-sky-500/30 text-sky-400 hover:text-sky-300 text-xs font-semibold flex items-center justify-center gap-2 transition-all">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+            <span>Upload custom song file (MP3 / Audio)</span>
+          </button>
+          <input id="custom-audio-file-input" type="file" accept="audio/*" class="hidden" onchange="handleCustomAudioFileUpload(this)" />
+        </div>
+
+        <!-- Quick Genre Chips -->
+        <div class="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+          <button type="button" onclick="searchMusicCategory('Trending', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-800 text-white hover:bg-zinc-700 whitespace-nowrap">Trending</button>
+          <button type="button" onclick="searchMusicCategory('Top Hits', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Top Hits</button>
+          <button type="button" onclick="searchMusicCategory('Hip-Hop', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Hip-Hop</button>
+          <button type="button" onclick="searchMusicCategory('Pop', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Pop</button>
+          <button type="button" onclick="searchMusicCategory('R&B', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">R&B</button>
+          <button type="button" onclick="searchMusicCategory('Indie', this)" class="music-genre-chip px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-zinc-400 hover:text-white whitespace-nowrap">Indie</button>
+        </div>
+
+        <!-- Songs List -->
+        <div id="music-results-list" class="max-h-[260px] overflow-y-auto divide-y divide-zinc-900 no-scrollbar">
+          <p class="py-8 text-center text-xs text-zinc-400">Loading songs...</p>
+        </div>
+      </div>
+
+      <!-- View 2: Instagram-Style Music Scrubber & Trimmer (width 50%) -->
+      <div id="music-trimmer-view" class="w-1/2 shrink-0 p-4 space-y-4 box-border">
+        <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
+          <button type="button" onclick="switchMusicPickerView('search')" class="flex items-center gap-1 text-xs text-zinc-400 hover:text-white transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+            Back
+          </button>
+          <span class="text-xs font-semibold text-zinc-200">Adjust Song Section</span>
+          <button type="button" onclick="confirmSelectedMusicSnippet()" class="text-xs font-bold px-3.5 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-white transition-all shadow-[0_0_12px_rgba(56,189,248,0.4)]">
+            Done
+          </button>
+        </div>
+
+        <!-- Selected Track Banner with live pulse -->
+        <div class="flex items-center gap-3 p-3 rounded-2xl bg-zinc-900/90 border border-zinc-800/80 shadow-lg relative overflow-hidden">
+          <div class="relative shrink-0">
+            <img id="trimmer-track-art" src="" alt="Album Art" class="w-13 h-13 rounded-xl object-cover bg-zinc-800 border border-zinc-700/60 shadow transition-all duration-300" />
+            <div id="trimmer-vinyl-badge" class="hidden absolute inset-0 rounded-xl bg-black/40 flex items-center justify-center">
+              <span class="w-2.5 h-2.5 rounded-full bg-sky-400 animate-ping"></span>
+            </div>
+          </div>
+          <div class="min-w-0 flex-1">
+            <h4 id="trimmer-track-title" class="text-xs font-bold text-white truncate"></h4>
+            <p id="trimmer-track-artist" class="text-[11px] text-zinc-400 truncate mt-0.5"></p>
+            <div class="flex items-center gap-1.5 mt-1">
+              <span id="trimmer-source-badge" class="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700 uppercase">Track</span>
+              <span id="trimmer-status-text" class="text-[10px] text-sky-400 font-medium">Tap to play</span>
+            </div>
+          </div>
+          <button type="button" id="trimmer-play-btn" onclick="toggleTrimmerPreviewAudio()" aria-label="Toggle preview" class="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center shrink-0 text-sm font-bold shadow-lg hover:bg-zinc-200 hover:scale-105 active:scale-95 transition-all">
+            ▶
+          </button>
+        </div>
+
+        <!-- Instagram Waveform & Timeline Scrubber -->
+        <div class="space-y-3 pt-1">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-zinc-400 font-medium">Snippet Start:</span>
+            <div class="flex items-center gap-1.5">
+              <span id="trimmer-time-display" class="font-bold text-sky-400 text-sm tracking-wide">0:00</span>
+              <span class="text-[10px] text-zinc-500 font-mono" id="trimmer-duration-display">/ 0:30</span>
+            </div>
+          </div>
+
+          <!-- Interactive Waveform with Direct Dragging -->
+          <div
+            id="trimmer-waveform-container"
+            class="relative w-full h-16 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center px-2.5 overflow-hidden select-none cursor-ew-resize touch-none shadow-inner"
+            onpointerdown="startWaveformDrag(event)"
+            onpointermove="handleWaveformDrag(event)"
+            onpointerup="endWaveformDrag(event)"
+            onpointercancel="endWaveformDrag(event)"
+          >
+            <!-- Waveform sound bars -->
+            <div id="trimmer-waveform-bars" class="w-full h-full flex items-center justify-between gap-[2px] pointer-events-none py-2.5"></div>
+            <!-- Instagram-style Highlighted Selection Window -->
+            <div id="trimmer-scrubber-window" class="absolute top-1 bottom-1 pointer-events-none border-2 border-sky-400 bg-sky-500/20 backdrop-blur-[1px] rounded-xl shadow-[0_0_15px_rgba(56,189,248,0.35)] transition-all duration-75" style="left: 0%; width: 28%;">
+              <div class="absolute left-1 top-1/2 -translate-y-1/2 w-1 h-5 rounded-full bg-sky-300"></div>
+              <div class="absolute right-1 top-1/2 -translate-y-1/2 w-1 h-5 rounded-full bg-sky-300"></div>
+            </div>
+            <!-- Glowing Live Playhead Needle -->
+            <div id="trimmer-playhead-needle" class="absolute top-0 bottom-0 pointer-events-none w-[2px] bg-white shadow-[0_0_8px_#38bdf8] z-10 transition-opacity duration-150 opacity-0" style="left: 0%;"></div>
+          </div>
+
+          <!-- Smooth Slider Range -->
+          <div class="space-y-1.5">
+            <input
+              id="trimmer-slider"
+              type="range"
+              min="0"
+              max="29"
+              step="0.25"
+              value="0"
+              oninput="handleTrimmerSliderInput(this.value)"
+              onchange="handleTrimmerSliderChange(this.value)"
+              class="w-full accent-sky-500 cursor-pointer h-2 bg-zinc-800 rounded-lg appearance-none transition-all"
+            />
+            <div class="flex justify-between text-[10px] text-zinc-500 font-mono">
+              <span id="trimmer-label-start">0:00</span>
+              <span class="text-zinc-400 font-sans text-[11px] flex items-center gap-1">
+                <svg class="w-3 h-3 text-sky-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"/></svg>
+                Slide or drag sound waves
+              </span>
+              <span id="trimmer-label-end">0:30</span>
+            </div>
           </div>
         </div>
       </div>
@@ -1730,7 +1783,26 @@
       window.addEventListener(evt, unlockSharedAudioOnInteraction, { passive: true });
     });
 
+    let trimmerAnimFrame = null;
+    let trimmerMaxSec = 29;
+    let isDraggingWaveform = false;
+    let trimmerSeekDebounce = null;
+
     function stopPreviewAudio() {
+      if (trimmerAnimFrame) {
+        cancelAnimationFrame(trimmerAnimFrame);
+        trimmerAnimFrame = null;
+      }
+      const needle = document.getElementById('trimmer-playhead-needle');
+      if (needle) needle.style.opacity = '0';
+      const vinylBadge = document.getElementById('trimmer-vinyl-badge');
+      if (vinylBadge) vinylBadge.classList.add('hidden');
+      const trackArt = document.getElementById('trimmer-track-art');
+      if (trackArt) trackArt.classList.remove('scale-105');
+      const statusText = document.getElementById('trimmer-status-text');
+      if (statusText) statusText.textContent = 'Tap to play';
+      document.querySelectorAll('#trimmer-waveform-bars > div').forEach(b => b.classList.remove('music-bar-dancing'));
+
       if (activeAudioEl) {
         try {
           activeAudioEl.pause();
@@ -1754,14 +1826,12 @@
     }
 
     function switchMusicPickerView(view) {
-      const searchView = document.getElementById('music-search-view');
-      const trimmerView = document.getElementById('music-trimmer-view');
+      const carousel = document.getElementById('music-picker-carousel');
+      if (!carousel) return;
       if (view === 'trimmer') {
-        searchView.classList.add('hidden');
-        trimmerView.classList.remove('hidden');
+        carousel.style.transform = 'translateX(-50%)';
       } else {
-        trimmerView.classList.add('hidden');
-        searchView.classList.remove('hidden');
+        carousel.style.transform = 'translateX(0%)';
         stopPreviewAudio();
         renderMusicResults();
       }
@@ -1917,46 +1987,173 @@
 
     function openMusicTrimmerView(track, initialStartSec = 0) {
       trimmerCurrentTrack = track;
-      trimmerStartSec = Math.max(0, Math.min(29, Number(initialStartSec) || 0));
+      trimmerMaxSec = track.duration && track.duration > 15 ? Math.max(10, Math.floor(track.duration - 10)) : 29;
+      trimmerStartSec = Math.max(0, Math.min(trimmerMaxSec, Number(initialStartSec) || 0));
       stopPreviewAudio();
       switchMusicPickerView('trimmer');
 
-      document.getElementById('trimmer-track-art').src = track.artwork_url || '';
-      document.getElementById('trimmer-track-title').textContent = track.title || '';
-      document.getElementById('trimmer-track-artist').textContent = track.artist || '';
+      const artEl = document.getElementById('trimmer-track-art');
+      if (artEl) {
+        artEl.src = track.artwork_url || '/icon.svg';
+      }
+      document.getElementById('trimmer-track-title').textContent = track.title || 'Untitled Track';
+      document.getElementById('trimmer-track-artist').textContent = track.artist || 'Unknown Artist';
 
-      // Generate Instagram-like waveform sound bars
-      const barHeights = [28, 42, 65, 80, 52, 70, 95, 100, 72, 88, 45, 60, 80, 98, 62, 45, 75, 90, 100, 82, 55, 68, 92, 85, 65, 48, 72, 88, 95, 68, 52, 42, 65, 82, 68, 48];
+      const sourceBadge = document.getElementById('trimmer-source-badge');
+      if (sourceBadge) {
+        sourceBadge.textContent = track.is_custom ? 'Full Song (Custom)' : (track.source === 'deezer' ? 'Deezer' : 'Apple Music');
+      }
+
+      const durDisplay = document.getElementById('trimmer-duration-display');
+      if (durDisplay) {
+        const totalDur = track.duration ? track.duration : 30;
+        durDisplay.textContent = `/ ${formatMusicSeconds(totalDur)}`;
+      }
+      const labelEnd = document.getElementById('trimmer-label-end');
+      if (labelEnd) {
+        const totalDur = track.duration ? track.duration : 30;
+        labelEnd.textContent = formatMusicSeconds(totalDur);
+      }
+
+      // Generate Instagram-like waveform sound bars with varied heights
+      const barHeights = [
+        25, 40, 60, 85, 95, 70, 50, 65, 80, 100, 75, 45, 60, 90, 85, 65, 50, 70,
+        95, 100, 80, 55, 65, 90, 85, 60, 45, 70, 85, 95, 75, 50, 60, 85, 70, 45,
+        35, 55, 75, 90, 80, 60, 40, 65, 85, 95, 70, 50, 40, 30
+      ];
       const barsContainer = document.getElementById('trimmer-waveform-bars');
       if (barsContainer) {
-        barsContainer.innerHTML = barHeights.map(h => `
-          <div class="flex-1 bg-white/40 rounded-full transition-all" style="height: ${h}%;"></div>
+        barsContainer.innerHTML = barHeights.map((h, i) => `
+          <div class="flex-1 bg-white/30 rounded-full transition-all duration-150" style="height: ${h}%; animation-delay: ${(i * 45) % 800}ms;"></div>
         `).join('');
       }
 
       const slider = document.getElementById('trimmer-slider');
-      if (slider) slider.value = String(trimmerStartSec);
+      if (slider) {
+        slider.min = "0";
+        slider.max = String(trimmerMaxSec);
+        slider.step = "0.25";
+        slider.value = String(trimmerStartSec);
+      }
       updateTrimmerUI(trimmerStartSec);
-
-      // Immediately play snippet from the chosen second
       playTrimmerAudioSnippet(trimmerStartSec);
     }
 
     function updateTrimmerUI(sec) {
       const timeDisplay = document.getElementById('trimmer-time-display');
-      if (timeDisplay) timeDisplay.textContent = formatMusicSeconds(sec);
+      if (timeDisplay) timeDisplay.textContent = formatMusicSeconds(Math.floor(sec));
       const windowEl = document.getElementById('trimmer-scrubber-window');
+      const maxSec = trimmerMaxSec || 29;
       if (windowEl) {
-        const pct = Math.min(75, (sec / 30) * 75);
+        const windowWidthPct = maxSec > 40 ? 16 : 28;
+        windowEl.style.width = `${windowWidthPct}%`;
+        const maxLeft = 100 - windowWidthPct;
+        const pct = Math.min(maxLeft, Math.max(0, (sec / maxSec) * maxLeft));
         windowEl.style.left = `${pct}%`;
       }
     }
 
+    function startWaveformDrag(e) {
+      isDraggingWaveform = true;
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_e) {}
+      handleWaveformDrag(e);
+    }
+
+    function handleWaveformDrag(e) {
+      if (!isDraggingWaveform) return;
+      const container = document.getElementById('trimmer-waveform-container');
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const clientX = e.clientX ?? (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const maxSec = trimmerMaxSec || 29;
+      const targetSec = Math.round(ratio * maxSec * 4) / 4;
+      trimmerStartSec = targetSec;
+      const slider = document.getElementById('trimmer-slider');
+      if (slider) slider.value = String(targetSec);
+      updateTrimmerUI(targetSec);
+
+      if (trimmerSeekDebounce) clearTimeout(trimmerSeekDebounce);
+      trimmerSeekDebounce = setTimeout(() => {
+        if (activeAudioEl && !activeAudioEl.paused) {
+          activeAudioEl.currentTime = targetSec;
+        }
+      }, 60);
+    }
+
+    function endWaveformDrag(e) {
+      if (!isDraggingWaveform) return;
+      isDraggingWaveform = false;
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_e) {}
+      playTrimmerAudioSnippet(trimmerStartSec);
+    }
+
     function handleTrimmerSliderInput(val) {
-      const sec = Math.max(0, Math.min(29, Number(val) || 0));
+      const maxSec = trimmerMaxSec || 29;
+      const sec = Math.max(0, Math.min(maxSec, Number(val) || 0));
       trimmerStartSec = sec;
       updateTrimmerUI(sec);
+      if (trimmerSeekDebounce) clearTimeout(trimmerSeekDebounce);
+      trimmerSeekDebounce = setTimeout(() => {
+        if (activeAudioEl && !activeAudioEl.paused) {
+          activeAudioEl.currentTime = sec;
+        }
+      }, 60);
+    }
+
+    function handleTrimmerSliderChange(val) {
+      const maxSec = trimmerMaxSec || 29;
+      const sec = Math.max(0, Math.min(maxSec, Number(val) || 0));
+      trimmerStartSec = sec;
       playTrimmerAudioSnippet(sec);
+    }
+
+    function startTrimmerNeedleLoop() {
+      cancelAnimationFrame(trimmerAnimFrame);
+      const needle = document.getElementById('trimmer-playhead-needle');
+      const timeDisplay = document.getElementById('trimmer-time-display');
+      const statusText = document.getElementById('trimmer-status-text');
+      const vinylBadge = document.getElementById('trimmer-vinyl-badge');
+      const trackArt = document.getElementById('trimmer-track-art');
+      const bars = document.querySelectorAll('#trimmer-waveform-bars > div');
+
+      const loop = () => {
+        if (activeAudioEl && !activeAudioEl.paused && trimmerCurrentTrack) {
+          const curTime = activeAudioEl.currentTime || 0;
+          const totalDur = trimmerMaxSec > 0 ? (trimmerMaxSec + (trimmerMaxSec >= 60 ? 15 : 1)) : 30;
+          const pct = Math.min(100, Math.max(0, (curTime / totalDur) * 100));
+
+          if (needle) {
+            needle.style.opacity = '1';
+            needle.style.left = `${pct}%`;
+          }
+          if (timeDisplay && !isDraggingWaveform) {
+            timeDisplay.textContent = formatMusicSeconds(Math.floor(curTime));
+          }
+          if (statusText) statusText.textContent = `Playing at ${formatMusicSeconds(Math.floor(curTime))}`;
+          if (vinylBadge) vinylBadge.classList.remove('hidden');
+          if (trackArt) trackArt.classList.add('scale-105');
+
+          const totalBars = bars.length;
+          const activeIndex = Math.floor((pct / 100) * totalBars);
+          bars.forEach((b, idx) => {
+            if (idx <= activeIndex) {
+              b.classList.add('music-bar-active', 'music-bar-dancing');
+            } else {
+              b.classList.remove('music-bar-active', 'music-bar-dancing');
+            }
+          });
+
+          trimmerAnimFrame = requestAnimationFrame(loop);
+        } else {
+          if (needle) needle.style.opacity = '0';
+          if (statusText) statusText.textContent = 'Tap to play';
+          if (vinylBadge) vinylBadge.classList.add('hidden');
+          if (trackArt) trackArt.classList.remove('scale-105');
+          bars.forEach(b => b.classList.remove('music-bar-dancing'));
+        }
+      };
+      trimmerAnimFrame = requestAnimationFrame(loop);
     }
 
     function playTrimmerAudioSnippet(startSec) {
@@ -1974,7 +2171,9 @@
         try {
           audio.currentTime = startSec;
         } catch (_e) {}
-        audio.play().catch(() => {});
+        audio.play().then(() => {
+          startTrimmerNeedleLoop();
+        }).catch(() => {});
       };
 
       if (audio.readyState >= 1) {
@@ -1993,6 +2192,7 @@
           playTrimmerAudioSnippet(trimmerStartSec);
         }
       };
+      startTrimmerNeedleLoop();
     }
 
     function toggleTrimmerPreviewAudio() {
@@ -2005,9 +2205,60 @@
         activeAudioEl.currentTime = trimmerStartSec;
         activeAudioEl.play().catch(() => {});
         if (trimmerBtn) trimmerBtn.textContent = '❚❚';
+        startTrimmerNeedleLoop();
       } else {
         activeAudioEl.pause();
         if (trimmerBtn) trimmerBtn.textContent = '▶';
+      }
+    }
+
+    async function handleCustomAudioFileUpload(input) {
+      const file = input && input.files && input.files[0];
+      if (!file) return;
+      showToast('Loading full audio track...');
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        const tempAudio = new Audio(dataUrl);
+        await new Promise((resolve) => {
+          tempAudio.addEventListener('loadedmetadata', resolve, { once: true });
+          tempAudio.addEventListener('error', resolve, { once: true });
+          setTimeout(resolve, 1500);
+        });
+
+        const fullDuration = Math.max(15, Math.floor(tempAudio.duration || 180));
+        const rawName = file.name.replace(/\.[^/.]+$/, '');
+        let title = rawName;
+        let artist = 'Custom Upload';
+        if (rawName.includes(' - ')) {
+          const parts = rawName.split(' - ');
+          artist = parts[0].trim();
+          title = parts.slice(1).join(' - ').trim();
+        }
+
+        const customTrack = {
+          id: 'custom_' + Date.now(),
+          title: title,
+          artist: artist,
+          album: 'Uploaded Audio',
+          artwork_url: '',
+          preview_url: dataUrl,
+          duration: fullDuration,
+          is_custom: true,
+          is_explicit: false
+        };
+
+        openMusicTrimmerView(customTrack, 0);
+        showToast('Full song loaded! Scrub anywhere from 0:00 to end.');
+      } catch (err) {
+        showToast('Could not load audio file: ' + err.message);
+      } finally {
+        if (input) input.value = '';
       }
     }
 
