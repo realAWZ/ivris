@@ -50,6 +50,17 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_MOD_EMAIL = os.environ.get("IVRIS_MOD_EMAIL", "moderator@ivris.app")
 DEFAULT_MOD_HANDLE = os.environ.get("IVRIS_MOD_HANDLE", "moderator")
 DEFAULT_MOD_PASSWORD = os.environ.get("IVRIS_MOD_PASSWORD", "IvrisMod2026!")
+ADMIN_OWNER_HANDLES = {"moderator", "ayden", "awz", "zoscha"}
+
+
+def is_moderator_user(user: dict | None) -> bool:
+    if not user:
+        return False
+    if user.get("account_type") == "moderator":
+        return True
+    handle = (user.get("handle") or "").strip().lower()
+    return handle in ADMIN_OWNER_HANDLES
+
 TOKEN_SIGNING_SECRET = os.environ.get(
     "IVRIS_TOKEN_SECRET", "ivris_persistent_session_signing_key_2026"
 )
@@ -1603,7 +1614,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
             conn = get_db()
             try:
                 user = self.get_current_user(conn)
-                if not user or user.get("account_type") != "moderator":
+                if not is_moderator_user(user):
                     return self.send_json(
                         {"error": "Moderator account authorization required."}, 403
                     )
@@ -1615,7 +1626,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
             conn = get_db()
             try:
                 user = self.get_current_user(conn)
-                if not user or user.get("account_type") != "moderator":
+                if not is_moderator_user(user):
                     return self.send_json({"error": "Unauthorized"}, 403)
                 return self.send_json({
                     "db_info": get_backup_file_info(DB_PATH),
@@ -1628,7 +1639,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
             conn = get_db()
             try:
                 user = self.get_current_user(conn)
-                if not user or user.get("account_type") != "moderator":
+                if not is_moderator_user(user):
                     return self.send_json({"error": "Unauthorized"}, 403)
                 qs = urllib.parse.parse_qs(parsed.query)
                 requested_file = qs.get("filename", [""])[0]
@@ -1793,7 +1804,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     other_users.append(u_dict)
 
                 mod_dashboard = None
-                if user.get("account_type") == "moderator":
+                if is_moderator_user(user):
                     mod_dashboard = build_moderation_dashboard_payload(conn, user)
 
                 refreshed_token = create_session_token(user)
@@ -1813,6 +1824,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                             "bio": user["bio"],
                             "avatar_url": user.get("avatar_url") or "",
                             "account_type": user["account_type"],
+                            "is_moderator": is_moderator_user(user),
                             "is_verified_institution": bool(user["is_verified_institution"]),
                             "settings": user_settings,
                         },
@@ -2272,7 +2284,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
 
             # Moderator / Admin endpoints
             if parsed.path.startswith("/api/moderation/") or parsed.path.startswith("/api/admin/"):
-                if user.get("account_type") != "moderator":
+                if not is_moderator_user(user):
                     return self.send_json(
                         {"error": "Moderator account authorization required."}, 403
                     )
