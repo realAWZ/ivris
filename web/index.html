@@ -1128,8 +1128,23 @@
     let storyPaused = false;
     const recordedViewIdsThisSession = new Set();
 
+    const DEFAULT_API_HOST = 'https://butler-experiences-tape-dimension.trycloudflare.com';
+    const isHostedRemotely = window.location.hostname.endsWith('github.io') || (!window.location.hostname.endsWith('trycloudflare.com') && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' && !window.location.hostname.endsWith('onrender.com'));
+    const API_BASE = isHostedRemotely
+      ? (localStorage.getItem('ivris_api_host') || DEFAULT_API_HOST).replace(/\/+$/, '')
+      : '';
+
+    function resolveMediaUrl(url) {
+      if (!url) return '';
+      if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
+        return url;
+      }
+      const cleanPath = url.startsWith('/') ? url : '/' + url;
+      return API_BASE ? `${API_BASE}${cleanPath}` : cleanPath;
+    }
+
     function renderAvatarInner(entity, textSizeClass = 'text-xs') {
-      const url = entity?.avatar_url || '';
+      const url = resolveMediaUrl(entity?.avatar_url || '');
       const initials = ((entity?.handle || entity?.display_name || 'U').replace('@', '').slice(0, 2) || 'U').toUpperCase();
       if (url) {
         return `<img src="${escapeAttr(url)}" alt="" class="w-full h-full rounded-full object-cover" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='inline';" /><span style="display:none;" class="${textSizeClass} font-bold text-white select-none">${escapeAttr(initials)}</span>`;
@@ -1154,7 +1169,10 @@
       if (appState.token) {
         headers['Authorization'] = `Bearer ${appState.token}`;
       }
-      const res = await fetch(path, { credentials: 'same-origin', ...options, headers });
+      const fullUrl = (path.startsWith('http://') || path.startsWith('https://'))
+        ? path
+        : `${API_BASE}${path.startsWith('/') ? path : '/' + path}`;
+      const res = await fetch(fullUrl, { credentials: API_BASE ? 'include' : 'same-origin', ...options, headers });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Request failed');
@@ -2816,7 +2834,7 @@
       if (isVideoStory) {
         const hasSeparateMusic = Boolean(story.music && story.music.preview_url);
         const videoMuted = Boolean(appState.isMuted || hasSeparateMusic);
-        box.innerHTML = `<video id="active-story-video" src="${escapeAttr(story.media_url)}" width="430" height="764" autoplay playsinline ${videoMuted ? 'muted' : ''} draggable="false" oncontextmenu="return false;" class="w-full h-full object-cover pointer-events-none select-none"></video>`;
+        box.innerHTML = `<video id="active-story-video" src="${escapeAttr(resolveMediaUrl(story.media_url))}" width="430" height="764" autoplay playsinline ${videoMuted ? 'muted' : ''} draggable="false" oncontextmenu="return false;" class="w-full h-full object-cover pointer-events-none select-none"></video>`;
         const vid = document.getElementById('active-story-video');
         if (vid) {
           vid.muted = videoMuted;
@@ -2832,7 +2850,7 @@
           });
         }
       } else {
-        box.innerHTML = `<img src="${escapeAttr(story.media_url)}" alt="Story" draggable="false" oncontextmenu="return false;" class="w-full h-full object-cover pointer-events-none select-none" />`;
+        box.innerHTML = `<img src="${escapeAttr(resolveMediaUrl(story.media_url))}" alt="Story" draggable="false" oncontextmenu="return false;" class="w-full h-full object-cover pointer-events-none select-none" />`;
       }
 
       storyProgressTimer = setInterval(() => {
@@ -3404,7 +3422,8 @@
     }
 
     function renderCarouselMedia(post) {
-      const urls = (post.media_urls && post.media_urls.length > 0) ? post.media_urls : [post.media_url];
+      const rawUrls = (post.media_urls && post.media_urls.length > 0) ? post.media_urls : [post.media_url];
+      const urls = rawUrls.map(resolveMediaUrl);
       const total = urls.length;
       const idx = Math.min(appState.carouselIndexes[post.id] || 0, total - 1);
       const currentUrl = urls[idx];
@@ -3998,7 +4017,8 @@
             </div>
           </div>
         ` : unseen.map(post => {
-          const urls = (post.media_urls && post.media_urls.length > 0) ? post.media_urls : [post.media_url];
+          const rawUrls = (post.media_urls && post.media_urls.length > 0) ? post.media_urls : [post.media_url];
+          const urls = rawUrls.map(resolveMediaUrl);
           const curIdx = Math.min(appState.carouselIndexes[post.id] || 0, urls.length - 1);
 
           return `
@@ -4252,7 +4272,7 @@
                 const count = (p.media_urls && p.media_urls.length) || 1;
                 return `
                   <button onclick="openMyPostInsights('${p.id}')" class="ivris-media aspect-square bg-zinc-900 overflow-hidden relative" oncontextmenu="return false">
-                    <img src="${p.media_url}" alt="Your post" draggable="false" class="w-full h-full object-cover pointer-events-none" />
+                    <img src="${escapeAttr(resolveMediaUrl(p.media_url))}" alt="Your post" draggable="false" class="w-full h-full object-cover pointer-events-none" />
                     <span class="absolute bottom-1.5 left-1.5 flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/60 text-[11px] font-semibold text-white">
                       <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                       ${p.viewsCount || 0}
@@ -4608,7 +4628,7 @@
                     const count = (p.media_urls && p.media_urls.length) || 1;
                     return `
                       <button onclick="openUserPost('${p.id}')" class="ivris-media aspect-square bg-zinc-900 overflow-hidden relative" oncontextmenu="return false">
-                        <img src="${p.media_url}" alt="Post by ${escapeAttr(prof.handle)}" draggable="false" class="w-full h-full object-cover pointer-events-none" />
+                        <img src="${escapeAttr(resolveMediaUrl(p.media_url))}" alt="Post by ${escapeAttr(prof.handle)}" draggable="false" class="w-full h-full object-cover pointer-events-none" />
                         ${count > 1 ? `
                           <span class="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/65 text-xs font-semibold text-white">
                             1/${count}

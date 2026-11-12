@@ -235,12 +235,21 @@
       return new Date(ts * 1000).toLocaleString();
     }
 
+    const DEFAULT_API_HOST = 'https://butler-experiences-tape-dimension.trycloudflare.com';
+    const isHostedRemotely = window.location.hostname.endsWith('github.io') || (!window.location.hostname.endsWith('trycloudflare.com') && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' && !window.location.hostname.endsWith('onrender.com'));
+    const API_BASE = isHostedRemotely
+      ? (localStorage.getItem('ivris_api_host') || DEFAULT_API_HOST).replace(/\/+$/, '')
+      : '';
+
     async function modFetch(path, options = {}) {
       const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
       if (modState.token) {
         headers['Authorization'] = `Bearer ${modState.token}`;
       }
-      const res = await fetch(path, { ...options, headers, credentials: 'omit' });
+      const fullUrl = (path.startsWith('http://') || path.startsWith('https://'))
+        ? path
+        : `${API_BASE}${path.startsWith('/') ? path : '/' + path}`;
+      const res = await fetch(fullUrl, { ...options, headers, credentials: API_BASE ? 'include' : 'omit' });
       const data = await res.json();
       return { ok: res.ok, status: res.status, data };
     }
