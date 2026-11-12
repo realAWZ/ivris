@@ -1090,11 +1090,10 @@ def get_db_state_signature(db_file: Path) -> tuple:
 def sync_with_upstream(force: bool = False) -> dict:
     """
     Bidirectionally synchronizes accounts, connections, posts, and media blobs
-    between local database, live cloud server (https://ivris.onrender.com),
-    and the persistent ivris-data-vault branch using additive multi-master merging.
+    with the persistent ivris-data-vault branch using additive multi-master merging.
     """
-    upstream_url = os.environ.get("UPSTREAM_SYNC_URL", "https://ivris.onrender.com").rstrip("/")
-    if os.environ.get("RENDER") and "onrender.com" in upstream_url:
+    upstream_url = os.environ.get("UPSTREAM_SYNC_URL", "").rstrip("/")
+    if not upstream_url or "onrender.com" in upstream_url:
         return sync_from_cloud_vault()
 
     try:

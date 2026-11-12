@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL || 'https://ivris.onrender.com';
+  process.env.EXPO_PUBLIC_API_URL || 'https://butler-experiences-tape-dimension.trycloudflare.com';
 
 const TOKEN_KEY = 'ivris_auth_token';
 
