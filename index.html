@@ -1128,9 +1128,11 @@
     let storyPaused = false;
     const recordedViewIdsThisSession = new Set();
 
-    const DEFAULT_API_HOST = 'https://butler-experiences-tape-dimension.trycloudflare.com';
-    const isHostedRemotely = window.location.hostname.endsWith('github.io') || (!window.location.hostname.endsWith('trycloudflare.com') && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' && !window.location.hostname.endsWith('onrender.com'));
-    const API_BASE = isHostedRemotely
+    const DEFAULT_API_HOST = 'https://awz.pythonanywhere.com';
+    const isExternalClient = !window.location.hostname.endsWith('pythonanywhere.com') &&
+                             window.location.hostname !== 'localhost' &&
+                             window.location.hostname !== '127.0.0.1';
+    const API_BASE = isExternalClient
       ? (localStorage.getItem('ivris_api_host') || DEFAULT_API_HOST).replace(/\/+$/, '')
       : '';
 
