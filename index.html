@@ -946,14 +946,23 @@
       token: readStoredToken(),
       user: readCachedUser(),
       isSignUp: false,
+      authSubmitting: false,
+      authNotice: '',
       pendingConfirmEmail: '',
-      pendingConfirmCodePreview: '',
+      forgotPasswordStep: '', // '' | 'request' | 'verify'
+      forgotEmail: '',
+      forgotCode: '',
+      forgotNewPassword: '',
+      forgotConfirmPassword: '',
       draftEmail: '',
       draftPassword: '',
       draftHandle: '',
       draftName: '',
       draftConfirmCode: '',
       authError: '',
+      pendingConnectionIds: new Set(),
+      toastMessage: '',
+      toastType: '',
       screen: 'main', // 'main' | 'search' | 'profile' | 'settings' | 'messages' | 'chat' | 'myPost' | 'userProfile' | 'userPost'
       searchTab: 'accounts', // 'accounts' | 'institutions' | 'requests'
       searchQuery: '',
@@ -1227,31 +1236,78 @@
       t.finished.finally(() => document.getElementById('screen-heading')?.focus());
     }
 
+    let _toastTimer = null;
+    function showToast(msg, type = 'info') {
+      appState.toastMessage = msg || '';
+      appState.toastType = type;
+      render();
+      if (_toastTimer) clearTimeout(_toastTimer);
+      if (msg) {
+        _toastTimer = setTimeout(() => {
+          appState.toastMessage = '';
+          render();
+        }, 3500);
+      }
+    }
+
     function syncAuthDrafts() {
       const emailEl = document.getElementById('auth-email');
       const pwEl = document.getElementById('auth-password');
       const handleEl = document.getElementById('auth-handle');
       const nameEl = document.getElementById('auth-name');
       const codeEl = document.getElementById('auth-confirm-code');
+      const forgotEmailEl = document.getElementById('forgot-email');
+      const forgotCodeEl = document.getElementById('forgot-code');
+      const forgotNewPwEl = document.getElementById('forgot-new-password');
+      const forgotConfirmPwEl = document.getElementById('forgot-confirm-password');
       if (emailEl) appState.draftEmail = emailEl.value;
       if (pwEl) appState.draftPassword = pwEl.value;
       if (handleEl) appState.draftHandle = handleEl.value;
       if (nameEl) appState.draftName = nameEl.value;
       if (codeEl) appState.draftConfirmCode = codeEl.value;
+      if (forgotEmailEl) appState.forgotEmail = forgotEmailEl.value;
+      if (forgotCodeEl) appState.forgotCode = forgotCodeEl.value;
+      if (forgotNewPwEl) appState.forgotNewPassword = forgotNewPwEl.value;
+      if (forgotConfirmPwEl) appState.forgotConfirmPassword = forgotConfirmPwEl.value;
     }
 
     function toggleAuthMode() {
       syncAuthDrafts();
       appState.isSignUp = !appState.isSignUp;
       appState.pendingConfirmEmail = '';
+      appState.forgotPasswordStep = '';
       appState.authError = '';
+      appState.authNotice = '';
+      render();
+    }
+
+    function openForgotPassword() {
+      syncAuthDrafts();
+      appState.forgotPasswordStep = 'request';
+      appState.forgotEmail = appState.draftEmail || '';
+      appState.forgotCode = '';
+      appState.forgotNewPassword = '';
+      appState.forgotConfirmPassword = '';
+      appState.authError = '';
+      appState.authNotice = '';
+      render();
+    }
+
+    function closeForgotPassword() {
+      appState.forgotPasswordStep = '';
+      appState.authError = '';
+      appState.authNotice = '';
       render();
     }
 
     async function handleAuthSubmit(e) {
       e.preventDefault();
+      if (appState.authSubmitting) return;
       syncAuthDrafts();
       appState.authError = '';
+      appState.authNotice = '';
+      appState.authSubmitting = true;
+      render();
 
       try {
         const endpoint = appState.isSignUp ? '/api/signup' : '/api/signin';
@@ -1267,24 +1323,29 @@
 
         if (res.needs_confirmation) {
           appState.pendingConfirmEmail = res.email;
-          appState.pendingConfirmCodePreview = res.confirmation_code_preview || '';
-          appState.draftConfirmCode = res.confirmation_code_preview || '';
-          render();
+          appState.draftConfirmCode = '';
+          appState.authNotice = `Verification code sent to ${res.email}. Check your inbox or spam folder.`;
           return;
         }
 
-        persistAuthSession(res.token, null);
+        persistAuthSession(res.token, res.user || null);
         await loadLiveData();
       } catch (err) {
         appState.authError = err.message;
+      } finally {
+        appState.authSubmitting = false;
         render();
       }
     }
 
     async function handleVerifyEmailSubmit(e) {
       e.preventDefault();
+      if (appState.authSubmitting) return;
       syncAuthDrafts();
       appState.authError = '';
+      appState.authNotice = '';
+      appState.authSubmitting = true;
+      render();
 
       try {
         const res = await apiFetch('/api/verify-email', {
@@ -1295,12 +1356,100 @@
           })
         });
         appState.pendingConfirmEmail = '';
-        appState.pendingConfirmCodePreview = '';
         appState.draftConfirmCode = '';
-        persistAuthSession(res.token, null);
+        persistAuthSession(res.token, res.user || null);
         await loadLiveData();
       } catch (err) {
         appState.authError = err.message;
+      } finally {
+        appState.authSubmitting = false;
+        render();
+      }
+    }
+
+    async function handleResendCode() {
+      if (appState.authSubmitting || !appState.pendingConfirmEmail) return;
+      appState.authError = '';
+      appState.authNotice = '';
+      appState.authSubmitting = true;
+      render();
+      try {
+        const res = await apiFetch('/api/resend-code', {
+          method: 'POST',
+          body: JSON.stringify({ email: appState.pendingConfirmEmail })
+        });
+        appState.authNotice = res.message || `New code sent to ${appState.pendingConfirmEmail}.`;
+      } catch (err) {
+        appState.authError = err.message;
+      } finally {
+        appState.authSubmitting = false;
+        render();
+      }
+    }
+
+    async function handleForgotPasswordRequest(e) {
+      e.preventDefault();
+      if (appState.authSubmitting) return;
+      syncAuthDrafts();
+      appState.authError = '';
+      appState.authNotice = '';
+      appState.authSubmitting = true;
+      render();
+      try {
+        const res = await apiFetch('/api/forgot-password', {
+          method: 'POST',
+          body: JSON.stringify({ email: appState.forgotEmail })
+        });
+        appState.forgotEmail = res.email || appState.forgotEmail;
+        appState.forgotPasswordStep = 'verify';
+        appState.authNotice = res.message || `Reset code sent to ${appState.forgotEmail}.`;
+      } catch (err) {
+        appState.authError = err.message;
+      } finally {
+        appState.authSubmitting = false;
+        render();
+      }
+    }
+
+    async function handleForgotPasswordReset(e) {
+      e.preventDefault();
+      if (appState.authSubmitting) return;
+      syncAuthDrafts();
+      appState.authError = '';
+      appState.authNotice = '';
+
+      if (appState.forgotNewPassword.length < 4) {
+        appState.authError = 'New password must be at least 4 characters.';
+        render();
+        return;
+      }
+      if (appState.forgotNewPassword !== appState.forgotConfirmPassword) {
+        appState.authError = 'Passwords do not match.';
+        render();
+        return;
+      }
+
+      appState.authSubmitting = true;
+      render();
+      try {
+        const res = await apiFetch('/api/reset-password', {
+          method: 'POST',
+          body: JSON.stringify({
+            email: appState.forgotEmail,
+            code: appState.forgotCode,
+            new_password: appState.forgotNewPassword
+          })
+        });
+        appState.forgotPasswordStep = '';
+        appState.forgotCode = '';
+        appState.forgotNewPassword = '';
+        appState.forgotConfirmPassword = '';
+        persistAuthSession(res.token, res.user || null);
+        await loadLiveData();
+      } catch (err) {
+        appState.authError = err.message;
+      } finally {
+        appState.authSubmitting = false;
         render();
       }
     }
@@ -3215,6 +3364,7 @@
 
     async function handleConnectionClick(targetId, explicitAction = '') {
       if (!targetId) return;
+      if (appState.pendingConnectionIds.has(targetId)) return;
       const uid = appState.user?.id;
       const conn = appState.connections.find(c =>
         (c.requester_id === uid && c.addressee_id === targetId) ||
@@ -3235,11 +3385,29 @@
           action = 'cancel';
         }
       }
-      await apiFetch('/api/connect', {
-        method: 'POST',
-        body: JSON.stringify({ target_id: targetId, action })
-      });
-      await loadLiveData();
+
+      appState.pendingConnectionIds.add(targetId);
+      render();
+      try {
+        const res = await apiFetch('/api/connect', {
+          method: 'POST',
+          body: JSON.stringify({ target_id: targetId, action })
+        });
+        // Optimistically synchronize connection state immediately
+        appState.connections = appState.connections.filter(c =>
+          !((c.requester_id === uid && c.addressee_id === targetId) ||
+            (c.requester_id === targetId && c.addressee_id === uid))
+        );
+        if (res.connection) {
+          appState.connections.push(res.connection);
+        }
+        await loadLiveData();
+      } catch (err) {
+        showToast(err?.message || 'Could not update friend connection.', 'error');
+      } finally {
+        appState.pendingConnectionIds.delete(targetId);
+        render();
+      }
     }
 
     async function openChat(partnerId) {
@@ -3774,34 +3942,36 @@
         root.innerHTML = `
           <div class="my-auto px-7 py-12 space-y-5">
             <div class="text-center space-y-1.5">
-              <h1 id="screen-heading" tabindex="-1" class="text-2xl font-bold tracking-tight">Confirm your email</h1>
+              <h1 id="screen-heading" tabindex="-1" class="text-2xl font-bold tracking-tight">Check your email</h1>
               <p class="text-xs text-zinc-400">
-                Enter the 6-digit confirmation code for <span class="text-white font-medium">${escapeAttr(appState.pendingConfirmEmail)}</span>
+                Enter the 6-digit verification code we emailed to <span class="text-white font-medium">${escapeAttr(appState.pendingConfirmEmail)}</span>. Check your spam folder if you don't see it.
               </p>
             </div>
 
-            ${appState.pendingConfirmCodePreview ? `
-              <div class="p-3 rounded-xl bg-zinc-900 border border-zinc-800 text-center space-y-1">
-                <span class="text-xs text-zinc-400 block">Your confirmation code:</span>
-                <span class="text-base font-bold tracking-widest text-sky-400">${appState.pendingConfirmCodePreview}</span>
+            ${appState.authNotice ? `
+              <div class="p-3 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-300 text-xs">
+                ${escapeAttr(appState.authNotice)}
               </div>
             ` : ''}
 
             ${appState.authError ? `
               <div class="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400 text-xs">
-                ${appState.authError}
+                ${escapeAttr(appState.authError)}
               </div>
             ` : ''}
 
             <form onsubmit="handleVerifyEmailSubmit(event)" class="space-y-3">
-              <input id="auth-confirm-code" type="text" required maxlength="6" value="${escapeAttr(appState.draftConfirmCode)}" placeholder="6-digit code" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-center tracking-widest text-sm font-semibold text-white focus:outline-none focus:border-zinc-600" />
-              <button type="submit" class="w-full py-2.5 rounded-xl bg-sky-500 text-white text-xs font-semibold">
-                Confirm & Sign In
+              <input id="auth-confirm-code" type="text" inputmode="numeric" required maxlength="6" value="${escapeAttr(appState.draftConfirmCode)}" placeholder="6-digit code" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-center tracking-widest text-sm font-semibold text-white focus:outline-none focus:border-zinc-600" />
+              <button type="submit" ${appState.authSubmitting ? 'disabled' : ''} class="w-full py-2.5 rounded-xl bg-sky-500 disabled:opacity-60 text-white text-xs font-semibold">
+                ${appState.authSubmitting ? 'Confirming...' : 'Confirm & Sign In'}
               </button>
             </form>
 
-            <div class="text-center">
-              <button type="button" onclick="appState.pendingConfirmEmail='';render()" class="text-xs text-zinc-400">
+            <div class="flex items-center justify-between text-xs pt-1">
+              <button type="button" onclick="handleResendCode()" ${appState.authSubmitting ? 'disabled' : ''} class="text-sky-400 hover:text-sky-300 font-medium disabled:opacity-50">
+                Resend code
+              </button>
+              <button type="button" onclick="appState.pendingConfirmEmail='';appState.authError='';appState.authNotice='';render()" class="text-zinc-400 hover:text-white">
                 Back
               </button>
             </div>
@@ -3810,7 +3980,68 @@
         return;
       }
 
-      // 1B. Sign In / Sign Up Screen ("Apply for an Institution Account" appears ONLY on Sign Up)
+      // 1B. Forgot Password Flow
+      if (!appState.user && appState.forgotPasswordStep) {
+        const isVerifyStep = appState.forgotPasswordStep === 'verify';
+        root.innerHTML = `
+          <div class="my-auto px-7 py-12 space-y-5">
+            <div class="text-center space-y-1.5">
+              <h1 id="screen-heading" tabindex="-1" class="text-2xl font-bold tracking-tight">Reset password</h1>
+              <p class="text-xs text-zinc-400">
+                ${isVerifyStep
+                  ? `Enter the 6-digit code emailed to <span class="text-white font-medium">${escapeAttr(appState.forgotEmail)}</span> and choose a new password.`
+                  : 'Enter your account email address or username to receive a reset code.'}
+              </p>
+            </div>
+
+            ${appState.authNotice ? `
+              <div class="p-3 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-300 text-xs">
+                ${escapeAttr(appState.authNotice)}
+              </div>
+            ` : ''}
+
+            ${appState.authError ? `
+              <div class="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400 text-xs">
+                ${escapeAttr(appState.authError)}
+              </div>
+            ` : ''}
+
+            ${isVerifyStep ? `
+              <form onsubmit="handleForgotPasswordReset(event)" class="space-y-3">
+                <input id="forgot-code" type="text" inputmode="numeric" required maxlength="6" value="${escapeAttr(appState.forgotCode)}" placeholder="6-digit reset code" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-center tracking-widest text-sm font-semibold text-white focus:outline-none focus:border-zinc-600" />
+                <input id="forgot-new-password" type="password" required minlength="4" value="${escapeAttr(appState.forgotNewPassword)}" placeholder="New password" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+                <input id="forgot-confirm-password" type="password" required minlength="4" value="${escapeAttr(appState.forgotConfirmPassword)}" placeholder="Confirm new password" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+                <button type="submit" ${appState.authSubmitting ? 'disabled' : ''} class="w-full py-2.5 rounded-xl bg-sky-500 disabled:opacity-60 text-white text-xs font-semibold">
+                  ${appState.authSubmitting ? 'Resetting...' : 'Reset Password & Sign In'}
+                </button>
+              </form>
+              <div class="flex items-center justify-between text-xs pt-1">
+                <button type="button" onclick="handleForgotPasswordRequest(event)" ${appState.authSubmitting ? 'disabled' : ''} class="text-sky-400 hover:text-sky-300 font-medium disabled:opacity-50">
+                  Resend code
+                </button>
+                <button type="button" onclick="closeForgotPassword()" class="text-zinc-400 hover:text-white">
+                  Back to Sign In
+                </button>
+              </div>
+            ` : `
+              <form onsubmit="handleForgotPasswordRequest(event)" class="space-y-3">
+                <input id="forgot-email" type="text" required value="${escapeAttr(appState.forgotEmail)}" placeholder="Email or username" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+                <button type="submit" ${appState.authSubmitting ? 'disabled' : ''} class="w-full py-2.5 rounded-xl bg-sky-500 disabled:opacity-60 text-white text-xs font-semibold">
+                  ${appState.authSubmitting ? 'Sending code...' : 'Send Reset Code'}
+                </button>
+              </form>
+              <div class="text-center pt-1">
+                <button type="button" onclick="closeForgotPassword()" class="text-xs text-zinc-400 hover:text-white">
+                  Back to Sign In
+                </button>
+              </div>
+            `}
+          </div>
+        `;
+        return;
+      }
+
+      // 1C. Sign In / Sign Up Screen ("Apply for an Institution Account" appears ONLY on Sign Up)
       if (!appState.user) {
         root.innerHTML = `
           <div class="px-4 pt-4 flex justify-end">
@@ -3825,7 +4056,7 @@
 
             ${appState.authError ? `
               <div class="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400 text-xs">
-                ${appState.authError}
+                ${escapeAttr(appState.authError)}
               </div>
             ` : ''}
 
@@ -3836,10 +4067,18 @@
               ${appState.isSignUp ? `
                 <input id="auth-handle" type="text" required value="${escapeAttr(appState.draftHandle)}" placeholder="Username" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
                 <input id="auth-name" type="text" required value="${escapeAttr(appState.draftName)}" placeholder="Full Name" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
-              ` : ''}
+              ` : `
+                <div class="flex justify-end">
+                  <button type="button" onclick="openForgotPassword()" class="text-xs text-sky-500 hover:text-sky-400 font-medium">
+                    Forgot password?
+                  </button>
+                </div>
+              `}
 
-              <button type="submit" class="w-full py-2.5 rounded-xl bg-sky-500 text-white text-xs font-semibold">
-                ${appState.isSignUp ? 'Sign Up' : 'Sign In'}
+              <button type="submit" ${appState.authSubmitting ? 'disabled' : ''} class="w-full py-2.5 rounded-xl bg-sky-500 disabled:opacity-60 text-white text-xs font-semibold">
+                ${appState.authSubmitting
+                  ? (appState.isSignUp ? 'Creating account...' : 'Signing in...')
+                  : (appState.isSignUp ? 'Sign Up' : 'Sign In')}
               </button>
             </form>
 
@@ -4161,15 +4400,19 @@
                       </div>
                     </button>
                     <div class="flex items-center gap-1.5 shrink-0">
-                      ${isIncomingPending ? `
-                        <button onclick="handleConnectionClick('${item.id}', 'accept')" class="h-8 px-3.5 rounded-lg bg-sky-500 text-white text-xs font-semibold whitespace-nowrap">
+                      ${appState.pendingConnectionIds.has(item.id) ? `
+                        <button type="button" disabled class="h-8 px-4 rounded-lg bg-zinc-800 text-zinc-400 text-xs font-semibold whitespace-nowrap opacity-75">
+                          ...
+                        </button>
+                      ` : isIncomingPending ? `
+                        <button type="button" onclick="handleConnectionClick('${item.id}', 'accept')" class="h-8 px-3.5 rounded-lg bg-sky-500 text-white text-xs font-semibold whitespace-nowrap">
                           Accept
                         </button>
-                        <button onclick="handleConnectionClick('${item.id}', 'decline')" class="h-8 px-3 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs font-semibold whitespace-nowrap">
+                        <button type="button" onclick="handleConnectionClick('${item.id}', 'decline')" class="h-8 px-3 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs font-semibold whitespace-nowrap">
                           Decline
                         </button>
                       ` : `
-                        <button onclick="handleConnectionClick('${item.id}')" class="h-8 px-4 rounded-lg ${isAccepted || isOutgoingPending ? 'bg-zinc-900 border border-zinc-800 text-zinc-200' : 'bg-sky-500 text-white'} text-xs font-semibold whitespace-nowrap">
+                        <button type="button" onclick="handleConnectionClick('${item.id}')" class="h-8 px-4 rounded-lg ${isAccepted || isOutgoingPending ? 'bg-zinc-900 border border-zinc-800 text-zinc-200' : 'bg-sky-500 text-white'} text-xs font-semibold whitespace-nowrap">
                           ${label}
                         </button>
                       `}
@@ -4596,15 +4839,19 @@
               </div>
 
               <div class="grid ${isConnected || isIncomingPending ? 'grid-cols-3' : 'grid-cols-2'} gap-2">
-                ${isIncomingPending ? `
-                  <button onclick="handleConnectionClick('${prof.id}', 'accept')" class="h-8 rounded-lg bg-sky-500 text-white text-xs font-semibold">
+                ${appState.pendingConnectionIds.has(prof.id) ? `
+                  <button type="button" disabled class="h-8 rounded-lg bg-zinc-800 text-zinc-400 text-xs font-semibold opacity-75">
+                    ...
+                  </button>
+                ` : isIncomingPending ? `
+                  <button type="button" onclick="handleConnectionClick('${prof.id}', 'accept')" class="h-8 rounded-lg bg-sky-500 text-white text-xs font-semibold">
                     Accept
                   </button>
-                  <button onclick="handleConnectionClick('${prof.id}', 'decline')" class="h-8 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs font-semibold">
+                  <button type="button" onclick="handleConnectionClick('${prof.id}', 'decline')" class="h-8 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs font-semibold">
                     Decline
                   </button>
                 ` : `
-                  <button onclick="handleConnectionClick('${prof.id}')" class="h-8 rounded-lg ${isConnected || isOutgoingPending ? 'bg-zinc-900 border border-zinc-800 text-white' : 'bg-sky-500 text-white'} text-xs font-semibold">
+                  <button type="button" onclick="handleConnectionClick('${prof.id}')" class="h-8 rounded-lg ${isConnected || isOutgoingPending ? 'bg-zinc-900 border border-zinc-800 text-white' : 'bg-sky-500 text-white'} text-xs font-semibold">
                     ${connLabel}
                   </button>
                 `}
@@ -4735,7 +4982,13 @@
         </div>
       `;
 
-      root.innerHTML = `${headerHtml}<main class="flex-1">${bodyHtml}</main>${footerNav}`;
+      const toastHtml = appState.toastMessage ? `
+        <div class="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-[390px] px-4 py-2.5 rounded-xl border text-xs font-medium shadow-xl ${appState.toastType === 'error' ? 'bg-rose-950/95 border-rose-500/40 text-rose-200' : 'bg-zinc-900/95 border-zinc-700 text-white'}">
+          ${escapeAttr(appState.toastMessage)}
+        </div>
+      ` : '';
+
+      root.innerHTML = `${toastHtml}${headerHtml}<main class="flex-1">${bodyHtml}</main>${footerNav}`;
       observeLazyMedia();
       syncAutoPostMusic();
     }

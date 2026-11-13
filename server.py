@@ -13,11 +13,14 @@ import re
 import secrets
 import shutil
 import sqlite3
+import smtplib
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from email.message import EmailMessage
 from pathlib import Path
 
 try:
@@ -27,6 +30,27 @@ except Exception:
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
+
+
+def _load_local_env_file():
+    env_path = BASE_DIR / ".env"
+    if not env_path.exists():
+        return
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k:
+                os.environ.setdefault(k, v)
+    except Exception:
+        pass
+
+
+_load_local_env_file()
 
 DATA_DIR_ENV = os.environ.get("DATA_DIR")
 if DATA_DIR_ENV and Path(DATA_DIR_ENV).exists():
@@ -90,6 +114,188 @@ EXPLICIT_NUDITY_PATTERN = re.compile(
 
 def hash_pw(password: str) -> str:
     return hashlib.sha256(("ivris_salt_" + password).encode("utf-8")).hexdigest()
+
+
+def sanitize_user_dict(user_row) -> dict:
+    u = dict(user_row)
+    try:
+        saved_settings = json.loads(u.get("settings_json") or "{}")
+    except Exception:
+        saved_settings = {}
+    return {
+        "id": u["id"],
+        "email": u["email"],
+        "handle": u["handle"],
+        "display_name": u["display_name"],
+        "bio": u.get("bio") or "",
+        "avatar_url": u.get("avatar_url") or "",
+        "account_type": u.get("account_type") or "personal",
+        "is_moderator": is_moderator_user(u),
+        "is_verified_institution": bool(u.get("is_verified_institution")),
+        "settings": {**DEFAULT_SETTINGS, **saved_settings},
+    }
+
+
+def send_email_message(to_email: str, subject: str, text_body: str, html_body: str = "") -> tuple[bool, str]:
+    """
+    Sends a transactional email via Brevo, Resend, SendGrid (HTTP APIs whitelisted
+    on PythonAnywhere free tier) or standard SMTP when configured.
+    """
+    _load_local_env_file()
+    from_email = (os.environ.get("EMAIL_FROM") or os.environ.get("SMTP_USER") or "no-reply@ivris.app").strip()
+    from_name = (os.environ.get("EMAIL_FROM_NAME") or "Ivris").strip()
+
+    brevo_key = (os.environ.get("BREVO_API_KEY") or "").strip()
+    if brevo_key:
+        try:
+            payload = json.dumps({
+                "sender": {"name": from_name, "email": from_email},
+                "to": [{"email": to_email}],
+                "subject": subject,
+                "textContent": text_body,
+                "htmlContent": html_body or f"<p>{text_body}</p>",
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.brevo.com/v3/smtp/email",
+                data=payload,
+                headers={
+                    "api-key": brevo_key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if 200 <= resp.status < 300:
+                    return True, ""
+            return False, "Brevo rejected the email request."
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="ignore")
+            print(f"[EMAIL] Brevo HTTP error {e.code}: {detail}")
+            return False, f"Email provider error ({e.code}): {detail[:180]}"
+        except Exception as e:
+            print(f"[EMAIL] Brevo error: {e}")
+            return False, f"Failed to send email via Brevo: {e}"
+
+    resend_key = (os.environ.get("RESEND_API_KEY") or "").strip()
+    if resend_key:
+        try:
+            payload = json.dumps({
+                "from": f"{from_name} <{from_email}>",
+                "to": [to_email],
+                "subject": subject,
+                "text": text_body,
+                "html": html_body or f"<p>{text_body}</p>",
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.resend.com/emails",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {resend_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if 200 <= resp.status < 300:
+                    return True, ""
+            return False, "Resend rejected the email request."
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="ignore")
+            print(f"[EMAIL] Resend HTTP error {e.code}: {detail}")
+            return False, f"Email provider error ({e.code}): {detail[:180]}"
+        except Exception as e:
+            print(f"[EMAIL] Resend error: {e}")
+            return False, f"Failed to send email via Resend: {e}"
+
+    sendgrid_key = (os.environ.get("SENDGRID_API_KEY") or "").strip()
+    if sendgrid_key:
+        try:
+            payload = json.dumps({
+                "personalizations": [{"to": [{"email": to_email}]}],
+                "from": {"email": from_email, "name": from_name},
+                "subject": subject,
+                "content": [
+                    {"type": "text/plain", "value": text_body},
+                    {"type": "text/html", "value": html_body or f"<p>{text_body}</p>"},
+                ],
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.sendgrid.com/v3/mail/send",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {sendgrid_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if 200 <= resp.status < 300:
+                    return True, ""
+            return False, "SendGrid rejected the email request."
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="ignore")
+            print(f"[EMAIL] SendGrid HTTP error {e.code}: {detail}")
+            return False, f"Email provider error ({e.code}): {detail[:180]}"
+        except Exception as e:
+            print(f"[EMAIL] SendGrid error: {e}")
+            return False, f"Failed to send email via SendGrid: {e}"
+
+    smtp_host = (os.environ.get("SMTP_HOST") or "").strip()
+    smtp_user = (os.environ.get("SMTP_USER") or "").strip()
+    smtp_pass = (os.environ.get("SMTP_PASS") or "").strip()
+    if smtp_host and smtp_user and smtp_pass:
+        try:
+            smtp_port = int(os.environ.get("SMTP_PORT") or "587")
+            msg = EmailMessage()
+            msg["Subject"] = subject
+            msg["From"] = f"{from_name} <{from_email}>"
+            msg["To"] = to_email
+            msg.set_content(text_body)
+            if html_body:
+                msg.add_alternative(html_body, subtype="html")
+            if smtp_port == 465:
+                with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15) as srv:
+                    srv.login(smtp_user, smtp_pass)
+                    srv.send_message(msg)
+            else:
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as srv:
+                    srv.starttls()
+                    srv.login(smtp_user, smtp_pass)
+                    srv.send_message(msg)
+            return True, ""
+        except Exception as e:
+            print(f"[EMAIL] SMTP error: {e}")
+            return False, f"SMTP send failed: {e}"
+
+    return False, (
+        "Email sending is not configured on this server yet. "
+        "Add BREVO_API_KEY (or RESEND_API_KEY / SENDGRID_API_KEY) and EMAIL_FROM to your .env file."
+    )
+
+
+def send_ivris_code_email(to_email: str, code: str, purpose: str = "verify") -> tuple[bool, str]:
+    if purpose == "reset":
+        subject = f"{code} is your Ivris password reset code"
+        headline = "Reset your Ivris password"
+        intro = "Use the 6-digit code below to reset your password. This code expires in 15 minutes."
+    else:
+        subject = f"{code} is your Ivris verification code"
+        headline = "Verify your Ivris email"
+        intro = "Enter the 6-digit confirmation code below to finish creating your Ivris account."
+
+    text_body = f"{headline}\n\n{intro}\n\nYour code: {code}\n\nIf you did not request this, you can safely ignore this email."
+    html_body = (
+        f"<div style='font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 440px; margin: 0 auto; padding: 24px; background: #09090b; color: #f4f4f5; border-radius: 16px;'>"
+        f"<h2 style='margin: 0 0 12px; font-size: 20px; color: #ffffff;'>{headline}</h2>"
+        f"<p style='margin: 0 0 20px; font-size: 14px; color: #a1a1aa; line-height: 1.5;'>{intro}</p>"
+        f"<div style='background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 16px; text-align: center; margin-bottom: 20px;'>"
+        f"<span style='font-size: 28px; font-weight: 700; letter-spacing: 6px; color: #38bdf8;'>{code}</span>"
+        f"</div>"
+        f"<p style='margin: 0; font-size: 12px; color: #71717a;'>If you didn't request this, you can safely ignore this message.</p>"
+        f"</div>"
+    )
+    return send_email_message(to_email, subject, text_body, html_body)
 
 
 def create_session_token(user_row) -> str:
@@ -332,6 +538,10 @@ def init_db():
         cur.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''")
     if "updated_at" not in existing_user_cols:
         cur.execute("ALTER TABLE users ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0")
+    if "reset_code" not in existing_user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN reset_code TEXT DEFAULT ''")
+    if "reset_code_expires_at" not in existing_user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN reset_code_expires_at INTEGER NOT NULL DEFAULT 0")
 
     existing_report_cols = [
         r["name"] for r in cur.execute("PRAGMA table_info(moderation_reports)").fetchall()
@@ -438,47 +648,77 @@ def backfill_disk_uploads_to_blobs():
         print(f"[MEDIA RECOVERY] Error backfilling disk uploads: {e}")
 
 
-def create_database_backup(label: str = "auto", sync_vault: bool = True) -> dict:
+_backup_lock = threading.Lock()
+_last_latest_backup_ts = 0.0
+
+
+def create_database_backup(label: str = "auto", sync_vault: bool = True, force: bool = False) -> dict:
     """
-    Creates an atomic, consistent SQLite snapshot of the live database using
-    SQLite's online backup API without interrupting active transactions.
-    Also updates backups/ivris_latest.db as the primary restore image.
+    Creates an atomic, consistent SQLite snapshot without blocking normal API requests
+    or overflowing disk quotas on constrained hosts like PythonAnywhere.
     """
+    global _last_latest_backup_ts
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        ts_str = time.strftime("%Y%m%d_%H%M%S")
-        filename = f"ivris_backup_{ts_str}_{label}.db"
-        dest_path = BACKUP_DIR / filename
-        latest_path = BACKUP_DIR / "ivris_latest.db"
-
+        prune_old_backups(keep=2)
         if not DB_PATH.exists() or DB_PATH.stat().st_size == 0:
             return {"error": "Live database file does not exist yet."}
 
-        src = sqlite3.connect(DB_PATH, timeout=30.0)
-        dst = sqlite3.connect(dest_path, timeout=30.0)
-        with dst:
-            src.backup(dst)
-        dst.close()
+        if not force and label not in ("manual", "pre_restore_safety"):
+            now_mono = time.monotonic()
+            if now_mono - _last_latest_backup_ts < 30.0:
+                return {"ok": True, "deferred": True}
+            _last_latest_backup_ts = now_mono
 
-        # Update latest pointer backup image
-        dst_latest = sqlite3.connect(latest_path, timeout=30.0)
-        with dst_latest:
-            src.backup(dst_latest)
-        dst_latest.close()
-        src.close()
+            def _bg_backup():
+                with _backup_lock:
+                    try:
+                        latest_path = BACKUP_DIR / "ivris_latest.db"
+                        src = sqlite3.connect(DB_PATH, timeout=30.0)
+                        dst_latest = sqlite3.connect(latest_path, timeout=30.0)
+                        with dst_latest:
+                            src.backup(dst_latest)
+                        dst_latest.close()
+                        src.close()
+                        prune_old_backups(keep=2)
+                    except Exception as bg_e:
+                        print(f"[BACKUP ENGINE] Background snapshot warning: {bg_e}")
+                if sync_vault and label not in ("boot", "startup", "hourly", "pre_restore_safety"):
+                    trigger_background_vault_sync()
 
-        prune_old_backups(keep=30)
-        info = get_backup_file_info(dest_path)
-        print(f"[BACKUP ENGINE] Snapshot created: {filename} ({info.get('size_human', '')})")
-        if sync_vault and label not in ("boot", "startup", "hourly", "pre_restore_safety"):
-            trigger_background_vault_sync()
-        return info
+            threading.Thread(target=_bg_backup, daemon=True).start()
+            return {"ok": True, "background": True}
+
+        with _backup_lock:
+            ts_str = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"ivris_backup_{ts_str}_{label}.db"
+            dest_path = BACKUP_DIR / filename
+            latest_path = BACKUP_DIR / "ivris_latest.db"
+
+            src = sqlite3.connect(DB_PATH, timeout=30.0)
+            dst = sqlite3.connect(dest_path, timeout=30.0)
+            with dst:
+                src.backup(dst)
+            dst.close()
+
+            dst_latest = sqlite3.connect(latest_path, timeout=30.0)
+            with dst_latest:
+                src.backup(dst_latest)
+            dst_latest.close()
+            src.close()
+
+            prune_old_backups(keep=2)
+            info = get_backup_file_info(dest_path)
+            print(f"[BACKUP ENGINE] Snapshot created: {filename} ({info.get('size_human', '')})")
+            if sync_vault and label not in ("boot", "startup", "hourly", "pre_restore_safety"):
+                trigger_background_vault_sync()
+            return info
     except Exception as e:
         print(f"[BACKUP ENGINE] Failed to create backup: {e}")
         return {"error": str(e)}
 
 
-def prune_old_backups(keep: int = 30):
+def prune_old_backups(keep: int = 2):
     try:
         files = [
             f
@@ -1036,6 +1276,8 @@ def push_to_cloud_vault() -> bool:
 
 
 def trigger_background_vault_sync():
+    if os.environ.get("PYTHONANYWHERE_DOMAIN") or os.environ.get("PYTHONANYWHERE_SITE"):
+        return
     global _vault_sync_pending
     if _vault_sync_pending:
         return
@@ -1659,7 +1901,13 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
     def end_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin") if hasattr(self, "headers") else None
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
+            self.send_header("Vary", "Origin")
+        else:
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Cache-Control", "no-store")
@@ -2076,7 +2324,10 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 ).fetchone()
                 if existing_email:
                     if existing_email["email_confirmed"] == 0:
-                        code = f"{random.randint(100000, 999999)}"
+                        code = f"{secrets.randbelow(900000) + 100000}"
+                        sent, send_err = send_ivris_code_email(email, code, purpose="verify")
+                        if not sent:
+                            return self.send_json({"error": send_err}, 503)
                         conn.execute(
                             "UPDATE users SET verification_code = ?, password_hash = ? WHERE id = ?",
                             (code, hash_pw(password), existing_email["id"]),
@@ -2086,7 +2337,6 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                             {
                                 "needs_confirmation": True,
                                 "email": email,
-                                "confirmation_code_preview": code,
                             }
                         )
                     return self.send_json(
@@ -2103,7 +2353,11 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     )
 
                 uid = "usr_" + secrets.token_hex(8)
-                code = f"{random.randint(100000, 999999)}"
+                code = f"{secrets.randbelow(900000) + 100000}"
+                sent, send_err = send_ivris_code_email(email, code, purpose="verify")
+                if not sent:
+                    return self.send_json({"error": send_err}, 503)
+
                 conn.execute(
                     """
                     INSERT INTO users (id, email, password_hash, handle, display_name, bio, avatar_url, account_type, is_verified_institution, email_confirmed, verification_code, settings_json, created_at)
@@ -2126,8 +2380,31 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     {
                         "needs_confirmation": True,
                         "email": email,
-                        "confirmation_code_preview": code,
                     }
+                )
+
+            if parsed.path == "/api/resend-code":
+                email = (body.get("email") or "").strip().lower()
+                if not email:
+                    return self.send_json({"error": "Email address is required."}, 400)
+                user = conn.execute(
+                    "SELECT * FROM users WHERE email = ?", (email,)
+                ).fetchone()
+                if not user:
+                    return self.send_json({"error": "Account not found."}, 404)
+                if user["email_confirmed"] == 1:
+                    return self.send_json({"error": "This email is already verified. Please sign in."}, 400)
+                code = f"{secrets.randbelow(900000) + 100000}"
+                sent, send_err = send_ivris_code_email(email, code, purpose="verify")
+                if not sent:
+                    return self.send_json({"error": send_err}, 503)
+                conn.execute(
+                    "UPDATE users SET verification_code = ? WHERE id = ?",
+                    (code, user["id"]),
+                )
+                conn.commit()
+                return self.send_json(
+                    {"ok": True, "message": f"A new verification code was sent to {email}."}
                 )
 
             if parsed.path == "/api/verify-email":
@@ -2161,7 +2438,93 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         "token": token,
                         "account_type": updated_user["account_type"],
                         "handle": updated_user["handle"],
-                        "user": dict(updated_user),
+                        "user": sanitize_user_dict(updated_user),
+                    },
+                    extra_headers={"Set-Cookie": cookie_val},
+                )
+
+            if parsed.path == "/api/forgot-password":
+                identifier = (body.get("email") or "").strip().lower()
+                if not identifier:
+                    return self.send_json(
+                        {"error": "Please enter your account email or username."}, 400
+                    )
+                clean_handle = identifier.replace("@", "")
+                user = conn.execute(
+                    "SELECT * FROM users WHERE email = ? OR handle = ?",
+                    (identifier, clean_handle),
+                ).fetchone()
+                if not user:
+                    return self.send_json(
+                        {"error": "No account found with that email or username."}, 404
+                    )
+
+                code = f"{secrets.randbelow(900000) + 100000}"
+                expires_at = int(time.time()) + 900
+                sent, send_err = send_ivris_code_email(user["email"], code, purpose="reset")
+                if not sent:
+                    return self.send_json({"error": send_err}, 503)
+
+                conn.execute(
+                    "UPDATE users SET reset_code = ?, reset_code_expires_at = ? WHERE id = ?",
+                    (code, expires_at, user["id"]),
+                )
+                conn.commit()
+                return self.send_json(
+                    {
+                        "ok": True,
+                        "email": user["email"],
+                        "message": f"A 6-digit reset code was sent to {user['email']}.",
+                    }
+                )
+
+            if parsed.path == "/api/reset-password":
+                identifier = (body.get("email") or "").strip().lower()
+                code = (body.get("code") or "").strip()
+                new_password = (body.get("new_password") or "").strip()
+                if not identifier or not code or len(new_password) < 4:
+                    return self.send_json(
+                        {"error": "Enter your email, 6-digit reset code, and a new password (4+ characters)."},
+                        400,
+                    )
+                clean_handle = identifier.replace("@", "")
+                user = conn.execute(
+                    "SELECT * FROM users WHERE email = ? OR handle = ?",
+                    (identifier, clean_handle),
+                ).fetchone()
+                if not user:
+                    return self.send_json({"error": "Account not found."}, 404)
+                if not user["reset_code"] or user["reset_code"] != code:
+                    return self.send_json({"error": "Invalid 6-digit reset code."}, 400)
+                if int(user["reset_code_expires_at"] or 0) < int(time.time()):
+                    return self.send_json({"error": "Reset code expired. Please request a new one."}, 400)
+
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET password_hash = ?, reset_code = '', reset_code_expires_at = 0, email_confirmed = 1
+                    WHERE id = ?
+                    """,
+                    (hash_pw(new_password), user["id"]),
+                )
+                updated_user = conn.execute(
+                    "SELECT * FROM users WHERE id = ?", (user["id"],)
+                ).fetchone()
+                token = create_session_token(updated_user)
+                conn.execute(
+                    "INSERT OR REPLACE INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)",
+                    (token, user["id"], int(time.time())),
+                )
+                conn.commit()
+                create_database_backup("password_reset")
+                cookie_val = f"ivris_session={token}; Max-Age=31536000; Path=/; SameSite=Lax; HttpOnly"
+                return self.send_json(
+                    {
+                        "ok": True,
+                        "token": token,
+                        "account_type": updated_user["account_type"],
+                        "handle": updated_user["handle"],
+                        "user": sanitize_user_dict(updated_user),
                     },
                     extra_headers={"Set-Cookie": cookie_val},
                 )
@@ -2190,7 +2553,10 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                     return self.send_json({"error": "Incorrect password."}, 401)
 
                 if user["email_confirmed"] == 0:
-                    code = user["verification_code"] or f"{random.randint(100000, 999999)}"
+                    code = f"{secrets.randbelow(900000) + 100000}"
+                    sent, send_err = send_ivris_code_email(user["email"], code, purpose="verify")
+                    if not sent:
+                        return self.send_json({"error": send_err}, 503)
                     conn.execute(
                         "UPDATE users SET verification_code = ? WHERE id = ?",
                         (code, user["id"]),
@@ -2200,7 +2566,6 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         {
                             "needs_confirmation": True,
                             "email": user["email"],
-                            "confirmation_code_preview": code,
                         }
                     )
 
@@ -2225,6 +2590,7 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         "token": token,
                         "account_type": user["account_type"],
                         "handle": user["handle"],
+                        "user": sanitize_user_dict(user),
                     },
                     extra_headers=extra_hdrs,
                 )
@@ -2945,8 +3311,22 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 elif existing["status"] == "accepted" and action in ("remove", "unfriend", ""):
                     _delete_existing_conns()
                 conn.commit()
+                updated_conn = conn.execute(
+                    """
+                    SELECT * FROM connections
+                    WHERE (requester_id = ? AND addressee_id = ?)
+                       OR (requester_id = ? AND addressee_id = ?)
+                    LIMIT 1
+                    """,
+                    (uid, target_id, target_id, uid),
+                ).fetchone()
                 create_database_backup("connection_updated")
-                return self.send_json({"ok": True})
+                return self.send_json(
+                    {
+                        "ok": True,
+                        "connection": dict(updated_conn) if updated_conn else None,
+                    }
+                )
 
             if parsed.path == "/api/messages":
                 recipient_id = body.get("recipient_id", "")
