@@ -1582,12 +1582,12 @@ def federated_music_catalog_search(query: str) -> list[dict]:
     seen = set()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        futures = []
-        for q in unique_queries[:3]:
-            futures.append(executor.submit(search_deezer_music_catalog, q, 35))
-            futures.append(executor.submit(search_apple_music_catalog, q, 35))
+        # Run Apple Music FIRST so permanent iTunes preview URLs are preferred over
+        # Deezer signed URLs (which expire after ~1 hour).
+        apple_futures = [executor.submit(search_apple_music_catalog, q, 35) for q in unique_queries[:3]]
+        deezer_futures = [executor.submit(search_deezer_music_catalog, q, 35) for q in unique_queries[:3]]
 
-        for fut in futures:
+        for fut in apple_futures + deezer_futures:
             try:
                 for t in fut.result():
                     key = (
@@ -1618,6 +1618,94 @@ def federated_music_catalog_search(query: str) -> list[dict]:
 
     all_tracks.sort(key=lambda x: x[0], reverse=True)
     return [t for _, t in all_tracks]
+
+
+_music_refresh_cache: dict[str, tuple[str, int]] = {}
+
+
+def is_expired_music_preview_url(url: str) -> bool:
+    if not url or "dzcdn.net" not in url:
+        return False
+    m = re.search(r"exp=(\d+)", url)
+    if not m:
+        return False
+    try:
+        return int(m.group(1)) <= int(time.time()) + 120
+    except Exception:
+        return False
+
+
+def refresh_music_preview_dict(music: dict | None) -> tuple[dict | None, bool]:
+    """
+    Refreshes expiring Deezer preview URLs (dzcdn.net?hdnea=exp=...) either by
+    upgrading to a permanent Apple Music preview URL or querying Deezer's track API.
+    Returns (updated_music_dict, was_changed).
+    """
+    if not isinstance(music, dict):
+        return music, False
+    cur_url = str(music.get("preview_url") or "")
+    track_id = str(music.get("id") or "")
+    title = str(music.get("title") or "").strip()
+    artist = str(music.get("artist") or "").strip()
+
+    if not cur_url or "dzcdn.net" not in cur_url:
+        return music, False
+
+    cache_key = f"{track_id}|{title}|{artist}"
+    now_ts = int(time.time())
+    cached = _music_refresh_cache.get(cache_key)
+    if cached and cached[1] > now_ts + 120:
+        if cached[0] != cur_url:
+            updated = {**music, "preview_url": cached[0]}
+            return updated, True
+        return music, False
+
+    new_url = ""
+    # 1. Try Deezer track API directly when track_id is dz_<id>
+    if track_id.startswith("dz_"):
+        dz_num = track_id[3:].strip()
+        if dz_num.isdigit():
+            try:
+                req = urllib.request.Request(
+                    f"https://api.deezer.com/track/{dz_num}",
+                    headers={"User-Agent": "IvrisSocial/1.0"},
+                )
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    item = json.loads(resp.read().decode("utf-8"))
+                if item.get("preview"):
+                    new_url = item["preview"]
+            except Exception:
+                pass
+
+    # 2. Fallback: search Apple Music (permanent URL) or Deezer by title+artist
+    if not new_url and (title or artist):
+        q = f"{title} {artist}".strip()
+        apple_hits = search_apple_music_catalog(q, limit=5)
+        t_tok = normalize_music_search_token(title)
+        for hit in apple_hits:
+            if t_tok and t_tok in normalize_music_search_token(hit.get("title")):
+                new_url = hit.get("preview_url") or ""
+                break
+        if not new_url:
+            for hit in search_deezer_music_catalog(q, limit=5):
+                if t_tok and t_tok in normalize_music_search_token(hit.get("title")):
+                    new_url = hit.get("preview_url") or ""
+                    break
+
+    if new_url and new_url != cur_url:
+        exp_ts = now_ts + 1800
+        m = re.search(r"exp=(\d+)", new_url)
+        if m:
+            try:
+                exp_ts = int(m.group(1))
+            except Exception:
+                pass
+        elif "apple.com" in new_url:
+            exp_ts = now_ts + 86400 * 30
+        _music_refresh_cache[cache_key] = (new_url, exp_ts)
+        return {**music, "preview_url": new_url}, True
+
+    return music, False
 
 
 def inspect_image_bytes_for_nudity(raw_bytes: bytes) -> tuple[bool, str]:
@@ -2156,6 +2244,19 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                         )
                     except Exception:
                         p["music"] = None
+                    if isinstance(p.get("music"), dict) and is_expired_music_preview_url(
+                        str(p["music"].get("preview_url") or "")
+                    ):
+                        try:
+                            refreshed_music, music_changed = refresh_music_preview_dict(p["music"])
+                            if music_changed and isinstance(refreshed_music, dict):
+                                p["music"] = refreshed_music
+                                conn.execute(
+                                    "UPDATE posts SET music_json = ? WHERE id = ?",
+                                    (json.dumps(refreshed_music), p["id"]),
+                                )
+                        except Exception:
+                            pass
 
                     if author_id == uid:
                         viewers = [
@@ -2287,6 +2388,65 @@ class IvrisHandler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({"tracks": tracks})
             except Exception as exc:
                 return self.send_json({"tracks": [], "error": str(exc)})
+
+        if parsed.path == "/api/music-refresh":
+            qs = urllib.parse.parse_qs(parsed.query)
+            post_id = (qs.get("post_id", [""])[0] or "").strip()
+            track_id = (qs.get("id", [""])[0] or "").strip()
+            title = (qs.get("title", [""])[0] or "").strip()
+            artist = (qs.get("artist", [""])[0] or "").strip()
+            cur_url = (qs.get("url", [""])[0] or "").strip()
+            music_obj = {
+                "id": track_id,
+                "title": title,
+                "artist": artist,
+                "preview_url": cur_url,
+            }
+            conn = None
+            try:
+                if post_id:
+                    conn = get_db()
+                    row = conn.execute(
+                        "SELECT music_json FROM posts WHERE id = ?", (post_id,)
+                    ).fetchone()
+                    if row and row["music_json"]:
+                        try:
+                            stored = json.loads(row["music_json"])
+                            if isinstance(stored, dict):
+                                music_obj = {
+                                    **stored,
+                                    "id": track_id or stored.get("id", ""),
+                                    "title": title or stored.get("title", ""),
+                                    "artist": artist or stored.get("artist", ""),
+                                    "preview_url": cur_url or stored.get("preview_url", ""),
+                                }
+                        except Exception:
+                            pass
+                refreshed_music, changed = refresh_music_preview_dict(music_obj)
+                if changed and post_id and isinstance(refreshed_music, dict):
+                    if conn is None:
+                        conn = get_db()
+                    conn.execute(
+                        "UPDATE posts SET music_json = ? WHERE id = ?",
+                        (json.dumps(refreshed_music), post_id),
+                    )
+                    conn.commit()
+                return self.send_json(
+                    {
+                        "ok": True,
+                        "changed": changed,
+                        "music": refreshed_music,
+                        "preview_url": (refreshed_music or {}).get("preview_url", ""),
+                    }
+                )
+            except Exception as exc:
+                return self.send_json({"ok": False, "error": str(exc), "preview_url": cur_url})
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         return super().do_GET()
 

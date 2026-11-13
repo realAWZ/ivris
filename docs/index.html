@@ -1921,8 +1921,18 @@
     sharedFeedAudioEl.preload = 'auto';
     let feedAudioUnlocked = false;
     let pendingAutoplayRetry = false;
+    const musicRefreshAttempted = new Set();
 
-    function unlockSharedAudioOnInteraction() {
+    function unlockSharedAudioOnInteraction(e) {
+      if (
+        e &&
+        (e.type === 'pointerdown' || e.type === 'touchstart') &&
+        e.target &&
+        typeof e.target.closest === 'function' &&
+        e.target.closest('.post-speaker-btn, .ivris-media')
+      ) {
+        return;
+      }
       if (!feedAudioUnlocked) {
         feedAudioUnlocked = true;
         try {
@@ -1940,9 +1950,12 @@
       }
       if (pendingAutoplayRetry && !appState.isMuted) {
         pendingAutoplayRetry = false;
-        if (activeAudioEl && activeAutoPostId) {
+        if (activeAudioEl && activeAutoPostId && activeAudioEl.src) {
           activeAudioEl.muted = false;
-          activeAudioEl.play().catch(() => {});
+          const p = activeAudioEl.play();
+          if (p && typeof p.catch === 'function') {
+            p.catch(() => { pendingAutoplayRetry = true; });
+          }
         } else {
           syncAutoPostMusic();
         }
@@ -2459,7 +2472,12 @@
         stopPreviewAudio();
         return;
       }
-      const startSec = Math.max(0, Math.min(29, Number(post.music.start_time || 0)));
+      const resolvedAudioUrl = resolveMediaUrl(post.music.preview_url);
+      if (!resolvedAudioUrl) {
+        stopPreviewAudio();
+        return;
+      }
+      const startSec = Math.max(0, Number(post.music.start_time || 0));
       const isMuted = Boolean(appState.isMuted);
 
       if (activeAutoPostId === post.id && activeAudioEl) {
@@ -2473,6 +2491,18 @@
         if (!activeAudioEl.paused) {
           return;
         }
+        if (activeAudioEl.src && !activeAudioEl.error) {
+          const resumePromise = activeAudioEl.play();
+          if (resumePromise && typeof resumePromise.then === 'function') {
+            resumePromise.then(() => {
+              pendingAutoplayRetry = false;
+              feedAudioUnlocked = true;
+            }).catch(() => {
+              pendingAutoplayRetry = true;
+            });
+          }
+          return;
+        }
       }
 
       stopPreviewAudio();
@@ -2482,10 +2512,44 @@
 
       const audio = sharedFeedAudioEl;
       audio.muted = isMuted;
-      if (audio.src !== post.music.preview_url) {
-        audio.src = post.music.preview_url;
+      let fullTargetUrl = resolvedAudioUrl;
+      try {
+        fullTargetUrl = new URL(resolvedAudioUrl, window.location.href).href;
+      } catch (_e) {}
+      if (audio.src !== fullTargetUrl) {
+        audio.src = resolvedAudioUrl;
       }
       activeAudioEl = audio;
+
+      audio.onerror = async () => {
+        if (activeAutoPostId !== post.id || activeAudioEl !== audio) return;
+        const retryKey = `${post.id}|${post.music.preview_url || ''}`;
+        if (musicRefreshAttempted.has(retryKey)) return;
+        musicRefreshAttempted.add(retryKey);
+        try {
+          const params = new URLSearchParams({
+            post_id: String(post.id || ''),
+            id: String(post.music.id || ''),
+            title: String(post.music.title || ''),
+            artist: String(post.music.artist || ''),
+            url: String(post.music.preview_url || ''),
+          });
+          const res = await fetch(`${API_BASE}/api/music-refresh?${params.toString()}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          const nextUrl = data && data.preview_url ? String(data.preview_url) : '';
+          if (!nextUrl || nextUrl === post.music.preview_url) return;
+          post.music.preview_url = nextUrl;
+          if (activeAutoPostId !== post.id || activeAudioEl !== audio) return;
+          audio.src = resolveMediaUrl(nextUrl);
+          if (!appState.isMuted && !document.hidden) {
+            const retryPlay = audio.play();
+            if (retryPlay && typeof retryPlay.catch === 'function') {
+              retryPlay.catch(() => { pendingAutoplayRetry = true; });
+            }
+          }
+        } catch (_e) {}
+      };
 
       // CRITICAL: If user muted audio, keep activeAudioEl prepared & muted, and NEVER play sound
       if (isMuted) {
@@ -2493,36 +2557,40 @@
         return;
       }
 
-      const seekAndPlay = () => {
-        if (document.hidden || activeAudioEl !== audio || appState.isMuted) {
-          audio.muted = Boolean(appState.isMuted);
-          try { audio.pause(); } catch (_e) {}
+      const seekToStart = () => {
+        if (document.hidden || activeAudioEl !== audio || activeAutoPostId !== post.id || appState.isMuted) {
           return;
         }
-        audio.muted = false;
-        try {
-          if (Math.abs(audio.currentTime - startSec) > 0.6) {
-            audio.currentTime = startSec;
-          }
-        } catch (_e) {}
-        const playPromise = audio.play();
-        if (playPromise && typeof playPromise.catch === 'function') {
-          playPromise.catch(() => {
-            pendingAutoplayRetry = true;
-          });
+        if (startSec > 0) {
+          try {
+            const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+            const safeStart = duration > 1 ? Math.min(startSec, Math.max(0, duration - 1)) : startSec;
+            if (Math.abs(audio.currentTime - safeStart) > 0.6) {
+              audio.currentTime = safeStart;
+            }
+          } catch (_e) {}
         }
       };
 
       if (audio.readyState >= 1) {
-        seekAndPlay();
+        seekToStart();
       } else {
-        audio.addEventListener('loadedmetadata', seekAndPlay, { once: true });
-        audio.addEventListener('canplay', () => {
-          if (activeAudioEl === audio && !appState.isMuted && Math.abs(audio.currentTime - startSec) > 0.6) {
-            try { audio.currentTime = startSec; } catch (_e) {}
-          }
-        }, { once: true });
+        audio.addEventListener('loadedmetadata', seekToStart, { once: true });
+        audio.addEventListener('canplay', seekToStart, { once: true });
       }
+
+      audio.muted = false;
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise.then(() => {
+          pendingAutoplayRetry = false;
+          feedAudioUnlocked = true;
+          seekToStart();
+        }).catch(() => {
+          pendingAutoplayRetry = true;
+        });
+      }
+
       audio.onended = () => {
         if (!document.hidden && activeAutoPostId === post.id && activeAudioEl === audio && !appState.isMuted) {
           try {
@@ -3532,7 +3600,18 @@
       if (now - lastMuteToggleTs < 200) return;
       lastMuteToggleTs = now;
 
-      appState.isMuted = !appState.isMuted;
+      const targetPost = findPostById(postId);
+      const postHasMusic = Boolean(targetPost && targetPost.music && targetPost.music.preview_url);
+      const autoplayWasBlocked = Boolean(
+        !appState.isMuted &&
+        postHasMusic &&
+        (!activeAudioEl || activeAudioEl.paused || activeAutoPostId !== postId)
+      );
+      if (autoplayWasBlocked) {
+        appState.isMuted = false;
+      } else {
+        appState.isMuted = !appState.isMuted;
+      }
       try {
         localStorage.setItem('ivris_is_muted', appState.isMuted ? '1' : '0');
       } catch (_e) {}
@@ -3547,15 +3626,15 @@
           try { activeStoryAudioEl.pause(); } catch (_e) {}
         }
       } else {
-        const targetPost = findPostById(postId);
-        if (activeAudioEl && activeAutoPostId === postId) {
+        pendingAutoplayRetry = false;
+        if (targetPost && targetPost.music && targetPost.music.preview_url) {
+          startAutoPostAudio(targetPost);
+        } else if (activeAudioEl && activeAutoPostId === postId && activeAudioEl.src) {
           activeAudioEl.muted = false;
           if (activeAudioEl.paused) {
             activeAudioEl.play().catch(() => {});
           }
-        } else if (targetPost && targetPost.music && targetPost.music.preview_url) {
-          startAutoPostAudio(targetPost);
-        } else if (activeAudioEl) {
+        } else if (activeAudioEl && activeAudioEl.src) {
           activeAudioEl.muted = false;
           activeAudioEl.play().catch(() => {});
         }
